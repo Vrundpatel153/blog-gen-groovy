@@ -16,6 +16,7 @@ Production-focused AI blog generation and editing studio with:
   - [.ai/decisions.md](/C:/Users/vrund/OneDrive/Desktop/blog generation/project/.ai/decisions.md)
   - [.ai/current-sprint.md](/C:/Users/vrund/OneDrive/Desktop/blog generation/project/.ai/current-sprint.md)
   - [.ai/handoff.md](/C:/Users/vrund/OneDrive/Desktop/blog generation/project/.ai/handoff.md)
+  - [.ai/implementation-playbook.md](/C:/Users/vrund/OneDrive/Desktop/blog generation/project/.ai/implementation-playbook.md)
 - Skills + context source of truth:
   - [.ai/AGENT_SKILLS_CONTEXT.md](/C:/Users/vrund/OneDrive/Desktop/blog generation/project/.ai/AGENT_SKILLS_CONTEXT.md)
 - Feature baseline (do-not-break behavior):
