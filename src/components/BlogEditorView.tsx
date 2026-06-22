@@ -2473,6 +2473,15 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
     } catch (err) {
       console.warn('Failed to persist applied action state:', err);
     }
+
+    // Keep History tab in sync so newly created section versions appear immediately.
+    if (chatVersions.length > 0 || activeTab === 'history') {
+      try {
+        await loadVersions();
+      } catch (err) {
+        console.warn('Failed to refresh versions after apply:', err);
+      }
+    }
     return true;
   };
 
@@ -3248,6 +3257,115 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
       highlight: opts?.highlight,
       style: opts?.style,
     });
+  };
+
+  const renderSnapshotDiffBlocks = (
+    beforeSections: BlogSection[],
+    afterSections: BlogSection[],
+    keyPrefix: string,
+    beforeStyles?: Record<string, TitleStyleState>,
+    afterStyles?: Record<string, TitleStyleState>
+  ) => {
+    const maxLength = Math.max(beforeSections.length, afterSections.length);
+    return Array.from({ length: maxLength }).map((_, idx) => {
+      const oldSec = beforeSections[idx];
+      const newSec = afterSections[idx];
+      const oldStyle = oldSec ? beforeStyles?.[oldSec.id] : undefined;
+      const newStyle = newSec ? afterStyles?.[newSec.id] : undefined;
+
+      if (sectionLooksSame(oldSec, newSec) && newSec) {
+        return renderPreviewSectionBlock(newSec, `${keyPrefix}-same-${idx}`, {
+          style: newStyle || oldStyle,
+        });
+      }
+
+      return renderInlineChangeAtPosition(
+        `${keyPrefix}-diff-${idx}`,
+        oldSec || null,
+        newSec || null,
+        newStyle
+      );
+    });
+  };
+
+  const toVersionSnapshotSection = (
+    baseSection: BlogSection,
+    candidate: BlogSection | null
+  ): BlogSection => {
+    const nextType: BlogSection['type'] = candidate?.type || baseSection.type;
+    const nextText = normalizeLayoutText(candidate?.text ?? baseSection.text ?? '');
+
+    if (nextType === 'image') {
+      const nextCaption = normalizeLayoutText(
+        candidate?.caption || candidate?.text || baseSection.caption || baseSection.text || ''
+      );
+      const nextUrl = normalizeEditorImageUrl(
+        candidate?.url || baseSection.url || '',
+        nextCaption || nextText || baseSection.id
+      );
+      return {
+        id: baseSection.id,
+        type: 'image',
+        text: nextText || nextCaption,
+        caption: nextCaption || nextText,
+        url: nextUrl,
+      };
+    }
+
+    if (nextType === 'heading') {
+      return {
+        id: baseSection.id,
+        type: 'heading',
+        level: candidate?.level || baseSection.level || 2,
+        text: nextText,
+      };
+    }
+
+    if (nextType === 'callout') {
+      return {
+        id: baseSection.id,
+        type: 'callout',
+        text: nextText,
+      };
+    }
+
+    return {
+      id: baseSection.id,
+      type: 'paragraph',
+      text: nextText,
+    };
+  };
+
+  const buildSectionVersionPreviewSnapshots = (version: SectionVersionItem) => {
+    const baseSections = cloneSections(localBlog.sections);
+    const targetIndex = baseSections.findIndex((sec) => sec.id === version.sectionId);
+    if (targetIndex < 0) return null;
+
+    const sectionTypeHint = getSectionTypeHint(version.sectionId);
+    const originalCandidate = toHistorySectionFromText(
+      version.originalText,
+      `history-modal-${version.id}-original`,
+      sectionTypeHint
+    );
+    const editedCandidate = toHistorySectionFromText(
+      version.editedText,
+      `history-modal-${version.id}-new`,
+      sectionTypeHint
+    );
+    const sourceSection = baseSections[targetIndex];
+
+    const beforeSections = [...baseSections];
+    beforeSections[targetIndex] = toVersionSnapshotSection(sourceSection, originalCandidate);
+
+    const afterSections = [...baseSections];
+    afterSections[targetIndex] = toVersionSnapshotSection(sourceSection, editedCandidate);
+
+    return {
+      beforeSections,
+      afterSections,
+      beforeSectionStyles: { ...sectionStyleMap } as Record<string, TitleStyleState>,
+      afterSectionStyles: { ...sectionStyleMap } as Record<string, TitleStyleState>,
+    };
   };
 
   return (
@@ -4728,6 +4846,45 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
             const isReverted = Boolean(message.actionData?.revertedAt);
             const canRevert = Boolean(message.actionData?.appliedAt) && !isReverted;
             const appliedAt = message.actionData?.appliedAt || message.createdAt;
+            const beforeState = message.actionData?.beforeState;
+            const afterState = message.actionData?.afterState;
+            const beforeSectionsSnapshot = Array.isArray(beforeState?.sections)
+              ? cloneSections(beforeState.sections as BlogSection[])
+              : null;
+            const afterSectionsSnapshot = Array.isArray(afterState?.sections)
+              ? cloneSections(afterState.sections as BlogSection[])
+              : null;
+            const hasSnapshotPreview = Boolean(beforeSectionsSnapshot && afterSectionsSnapshot);
+            const beforeTitle = normalizeLayoutText(beforeState?.title || localBlog.title);
+            const afterTitle = normalizeLayoutText(afterState?.title || beforeTitle || localBlog.title);
+            const beforeSubtitle = normalizeLayoutText(beforeState?.subtitle || localBlog.subtitle || '');
+            const afterSubtitle = normalizeLayoutText(afterState?.subtitle || beforeSubtitle || '');
+            const beforeTitleStyle: TitleStyleState =
+              hasSnapshotPreview && typeof beforeState?.titleStyle === 'object'
+                ? ({ ...(beforeState.titleStyle as TitleStyleState) } as TitleStyleState)
+                : ({ ...titleStyle } as TitleStyleState);
+            const afterTitleStyle: TitleStyleState =
+              hasSnapshotPreview && typeof afterState?.titleStyle === 'object'
+                ? ({ ...(afterState.titleStyle as TitleStyleState) } as TitleStyleState)
+                : ({ ...beforeTitleStyle } as TitleStyleState);
+            const beforeSectionStyles: Record<string, TitleStyleState> =
+              hasSnapshotPreview && typeof beforeState?.sectionStyles === 'object'
+                ? ({ ...(beforeState.sectionStyles as Record<string, TitleStyleState>) } as Record<
+                    string,
+                    TitleStyleState
+                  >)
+                : ({ ...sectionStyleMap } as Record<string, TitleStyleState>);
+            const afterSectionStyles: Record<string, TitleStyleState> =
+              hasSnapshotPreview && typeof afterState?.sectionStyles === 'object'
+                ? ({ ...(afterState.sectionStyles as Record<string, TitleStyleState>) } as Record<
+                    string,
+                    TitleStyleState
+                  >)
+                : ({ ...beforeSectionStyles } as Record<string, TitleStyleState>);
+            const titleChanged =
+              beforeTitle !== afterTitle ||
+              JSON.stringify(beforeTitleStyle || {}) !== JSON.stringify(afterTitleStyle || {});
+            const subtitleChanged = beforeSubtitle !== afterSubtitle;
             return (
               <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[82vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden animate-slideUp">
                 <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
@@ -4771,17 +4928,65 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
 
                     <div className="bg-[#f5efe4] border border-amber-100 rounded-xl p-3 max-h-[62vh] overflow-y-auto">
                       <div className="blog-paper rounded-xl p-4 blog-content max-w-none space-y-3">
-                        <div className="space-y-2 preview-changed">
-                          {renderHistoryTextDiffBlock(diff.originalText, `history-preview-${message.id}-original`, {
-                            sectionTypeHint,
-                            highlight: 'original',
-                          })}
-                          {renderHistoryTextDiffBlock(diff.suggestedText, `history-preview-${message.id}-new`, {
-                            sectionTypeHint,
-                            highlight: 'new',
-                            style: diff.suggestedStyle,
-                          })}
-                        </div>
+                        {hasSnapshotPreview ? (
+                          <>
+                            {titleChanged ? (
+                              <div className="mb-2 space-y-2 preview-changed">
+                                <h1
+                                  className="blog-doc-title bg-red-100/80 border border-red-300 rounded-xl p-3"
+                                  style={toTextStyle(beforeTitleStyle)}
+                                >
+                                  {sanitizeDisplayText(beforeTitle)}
+                                </h1>
+                                <h1
+                                  className="blog-doc-title bg-emerald-100/80 border border-emerald-300 rounded-xl p-3"
+                                  style={toTextStyle(afterTitleStyle)}
+                                >
+                                  {sanitizeDisplayText(afterTitle || beforeTitle)}
+                                </h1>
+                              </div>
+                            ) : (
+                              <h1 className="blog-doc-title mb-2" style={toTextStyle(afterTitleStyle)}>
+                                {sanitizeDisplayText(afterTitle || beforeTitle)}
+                              </h1>
+                            )}
+
+                            {(beforeSubtitle || afterSubtitle) ? (
+                              subtitleChanged ? (
+                                <div className="mb-4 space-y-2 preview-changed">
+                                  <p className="blog-subtitle bg-red-100/80 border border-red-300 rounded-xl p-3">
+                                    {sanitizeDisplayText(beforeSubtitle || 'No subtitle.')}
+                                  </p>
+                                  <p className="blog-subtitle bg-emerald-100/80 border border-emerald-300 rounded-xl p-3">
+                                    {sanitizeDisplayText(afterSubtitle || 'No subtitle.')}
+                                  </p>
+                                </div>
+                              ) : (
+                                <p className="blog-subtitle mb-6">{sanitizeDisplayText(afterSubtitle || beforeSubtitle)}</p>
+                              )
+                            ) : null}
+
+                            {renderSnapshotDiffBlocks(
+                              beforeSectionsSnapshot as BlogSection[],
+                              afterSectionsSnapshot as BlogSection[],
+                              `history-preview-snapshot-${message.id}`,
+                              beforeSectionStyles,
+                              afterSectionStyles
+                            )}
+                          </>
+                        ) : (
+                          <div className="space-y-2 preview-changed">
+                            {renderHistoryTextDiffBlock(diff.originalText, `history-preview-${message.id}-original`, {
+                              sectionTypeHint,
+                              highlight: 'original',
+                            })}
+                            {renderHistoryTextDiffBlock(diff.suggestedText, `history-preview-${message.id}-new`, {
+                              sectionTypeHint,
+                              highlight: 'new',
+                              style: diff.suggestedStyle,
+                            })}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -4822,16 +5027,7 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
           {(() => {
             const sectionTypeHint = getSectionTypeHint(historyPreviewVersion.sectionId);
             const sectionStyleHint = sectionStyleMap[historyPreviewVersion.sectionId];
-            const originalSection = toHistorySectionFromText(
-              historyPreviewVersion.originalText,
-              `history-modal-${historyPreviewVersion.id}-original`,
-              sectionTypeHint
-            );
-            const editedSection = toHistorySectionFromText(
-              historyPreviewVersion.editedText,
-              `history-modal-${historyPreviewVersion.id}-new`,
-              sectionTypeHint
-            );
+            const versionSnapshots = buildSectionVersionPreviewSnapshots(historyPreviewVersion);
             return (
           <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[82vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden animate-slideUp">
             <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
@@ -4841,7 +5037,7 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
                   <span>Version Preview</span>
                 </h3>
                 <p className="text-[11px] text-slate-555 mt-0.5">
-                  Compare this saved version before reverting.
+                  Full blog preview for this saved version with exact edited location highlight.
                 </p>
               </div>
               <button
@@ -4865,13 +5061,20 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
 
                 <div className="bg-[#f5efe4] border border-amber-100 rounded-xl p-3 max-h-[62vh] overflow-y-auto">
                   <div className="blog-paper rounded-xl p-4 blog-content max-w-none space-y-3">
-                    {originalSection || editedSection ? (
-                      renderInlineChangeAtPosition(
-                        `history-modal-${historyPreviewVersion.id}`,
-                        originalSection,
-                        editedSection,
-                        sectionStyleHint
-                      )
+                    {versionSnapshots ? (
+                      <>
+                        <h1 className="blog-doc-title mb-2">{sanitizeDisplayText(localBlog.title)}</h1>
+                        {sanitizeDisplayText(localBlog.subtitle || '') ? (
+                          <p className="blog-subtitle mb-6">{sanitizeDisplayText(localBlog.subtitle || '')}</p>
+                        ) : null}
+                        {renderSnapshotDiffBlocks(
+                          versionSnapshots.beforeSections,
+                          versionSnapshots.afterSections,
+                          `history-modal-snapshot-${historyPreviewVersion.id}`,
+                          versionSnapshots.beforeSectionStyles,
+                          versionSnapshots.afterSectionStyles
+                        )}
+                      </>
                     ) : (
                       <div className="space-y-2 preview-changed">
                         {renderHistoryTextDiffBlock(
