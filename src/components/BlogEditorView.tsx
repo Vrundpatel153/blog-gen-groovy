@@ -101,6 +101,11 @@ interface SelectedEditorScope {
   text: string;
 }
 
+interface ImageControlAnchor {
+  sectionId: string;
+  top: number;
+}
+
 const preserveHtmlListMarkers = (value: string): string => {
   if (!value || !/[<](ol|ul|li|\/li)[^>]*>/i.test(value)) return value;
 
@@ -594,6 +599,12 @@ export const BlogEditorView: React.FC<BlogEditorViewProps> = ({
   const skipEditorOnUpdateRef = useRef<number>(0);
   const latestSectionsRef = useRef<BlogSection[]>(blog.sections || []);
   const latestSectionStylesRef = useRef<Record<string, TitleStyleState>>({});
+  const editorBlocksRef = useRef<HTMLDivElement>(null);
+  const editorViewportRef = useRef<HTMLDivElement>(null);
+  const imageUploadInputRef = useRef<HTMLInputElement>(null);
+  const [imageControlAnchors, setImageControlAnchors] = useState<ImageControlAnchor[]>([]);
+  const [activeImageControlId, setActiveImageControlId] = useState<string | null>(null);
+  const pendingUploadSectionIdRef = useRef<string | null>(null);
   const publishMenuRef = useRef<HTMLDivElement>(null);
 
   // AI Assistant state
@@ -779,6 +790,128 @@ export const BlogEditorView: React.FC<BlogEditorViewProps> = ({
 
   const sectionComparableText = (sec: BlogSection): string =>
     normalizeLayoutText(sec.type === 'image' ? sec.caption || sec.text || sec.url || '' : sec.text || '');
+
+  const computeWordsFromSections = (sections: BlogSection[]): number =>
+    sections.reduce((acc, sec) => {
+      const countSource =
+        sec.type === 'image'
+          ? normalizeLayoutText(sec.caption || sec.text || '')
+          : normalizeLayoutText(sec.text || '');
+      if (!countSource) return acc;
+      return acc + countSource.split(/\s+/).filter(Boolean).length;
+    }, 0);
+
+  const applySectionUpdate = (nextSections: BlogSection[]) => {
+    const wordCount = computeWordsFromSections(nextSections);
+    const updatedBlog: Blog = {
+      ...localBlog,
+      sections: nextSections,
+      words: wordCount,
+      readTime: `${Math.max(1, Math.ceil(wordCount / 200))} min`,
+    };
+    isInternalUpdateRef.current = true;
+    setLocalBlog(updatedBlog);
+    setEditorContentSilently(nextSections);
+    debounceUpdateParent(updatedBlog);
+  };
+
+  const testImageUrlReachable = (url: string): Promise<boolean> =>
+    new Promise((resolve) => {
+      if (!url) {
+        resolve(false);
+        return;
+      }
+      const img = new window.Image();
+      const timer = window.setTimeout(() => resolve(false), 9000);
+      img.onload = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      img.onerror = () => {
+        clearTimeout(timer);
+        resolve(false);
+      };
+      img.src = url;
+    });
+
+  const updateImageSection = (sectionId: string, updater: (section: BlogSection) => BlogSection) => {
+    const nextSections = localBlog.sections.map((section) => {
+      if (section.id !== sectionId || section.type !== 'image') return section;
+      return updater(section);
+    });
+    applySectionUpdate(nextSections);
+  };
+
+  const promptAndApplyImageLink = async (sectionId: string) => {
+    const target = localBlog.sections.find((section) => section.id === sectionId && section.type === 'image');
+    if (!target) return;
+
+    const entered = window.prompt('Enter a direct image URL', target.url || '');
+    if (entered == null) return;
+    const normalized = normalizeEditorImageUrl(entered, target.caption || target.text || target.id || 'blog-image');
+    if (!normalized) {
+      alert('Invalid image URL. Please use a direct http/https image link.');
+      return;
+    }
+
+    const isReachable = await testImageUrlReachable(normalized);
+    if (!isReachable) {
+      alert('This image link is not reachable. Please use a direct, publicly accessible image URL.');
+      return;
+    }
+
+    const newCaption =
+      window.prompt('Image caption (optional)', target.caption || target.text || '') || target.caption || target.text || '';
+
+    updateImageSection(sectionId, (section) => ({
+      ...section,
+      url: normalized,
+      caption: normalizeLayoutText(newCaption),
+      text: normalizeLayoutText(newCaption || section.text || section.caption || ''),
+    }));
+    setActiveImageControlId(null);
+  };
+
+  const startImageUpload = (sectionId: string) => {
+    pendingUploadSectionIdRef.current = sectionId;
+    imageUploadInputRef.current?.click();
+  };
+
+  const onImageUploadSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    const sectionId = pendingUploadSectionIdRef.current;
+    event.target.value = '';
+    pendingUploadSectionIdRef.current = null;
+    if (!file || !sectionId) return;
+
+    if (!file.type.startsWith('image/')) {
+      alert('Please upload a valid image file.');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === 'string' ? reader.result : '';
+      if (!dataUrl.startsWith('data:image/')) {
+        alert('Unable to read image file.');
+        return;
+      }
+      const target = localBlog.sections.find((section) => section.id === sectionId && section.type === 'image');
+      const defaultCaption = target?.caption || target?.text || file.name.replace(/\.[^/.]+$/, '');
+      const caption = window.prompt('Image caption (optional)', defaultCaption || '') || defaultCaption || '';
+      updateImageSection(sectionId, (section) => ({
+        ...section,
+        url: dataUrl,
+        caption: normalizeLayoutText(caption),
+        text: normalizeLayoutText(caption || section.text || section.caption || ''),
+      }));
+      setActiveImageControlId(null);
+    };
+    reader.onerror = () => {
+      alert('Image upload failed. Please try another file.');
+    };
+    reader.readAsDataURL(file);
+  };
 
   const areSectionsEquivalent = (left: BlogSection[] = [], right: BlogSection[] = []): boolean => {
     if (left.length !== right.length) return false;
@@ -993,6 +1126,32 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
     },
   });
 
+  const refreshImageControlAnchors = useCallback(() => {
+    if (!editor?.view?.dom || !editorBlocksRef.current) {
+      setImageControlAnchors([]);
+      return;
+    }
+
+    const root = editor.view.dom as HTMLElement;
+    const containerRect = editorBlocksRef.current.getBoundingClientRect();
+    const anchors: ImageControlAnchor[] = [];
+
+    localBlog.sections.forEach((section) => {
+      if (section.type !== 'image') return;
+      const block =
+        (root.querySelector(`[data-id="${section.id}"]`) as HTMLElement | null) ||
+        (root.querySelector(`[id="${section.id}"]`) as HTMLElement | null);
+      if (!block) return;
+      const rect = block.getBoundingClientRect();
+      anchors.push({
+        sectionId: section.id,
+        top: rect.top - containerRect.top + rect.height / 2,
+      });
+    });
+
+    setImageControlAnchors(anchors);
+  }, [editor, localBlog.sections]);
+
   const setEditorContentSilently = (sections: BlogSection[]) => {
     if (!editor) return;
     skipEditorOnUpdateRef.current += 1;
@@ -1028,7 +1187,26 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
     const root = editor.view.dom as HTMLElement;
     const images = root.querySelectorAll('img');
     images.forEach((img) => applyImageElementFallback(img as HTMLImageElement));
-  }, [editor, localBlog.sections]);
+    refreshImageControlAnchors();
+  }, [editor, localBlog.sections, refreshImageControlAnchors]);
+
+  useEffect(() => {
+    if (!editor || !editorViewportRef.current) return;
+
+    const viewport = editorViewportRef.current;
+    const onScroll = () => refreshImageControlAnchors();
+    const onResize = () => refreshImageControlAnchors();
+
+    viewport.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onResize);
+    const timer = window.setTimeout(refreshImageControlAnchors, 120);
+
+    return () => {
+      viewport.removeEventListener('scroll', onScroll);
+      window.removeEventListener('resize', onResize);
+      window.clearTimeout(timer);
+    };
+  }, [editor, refreshImageControlAnchors, deviceLayout, activeTab]);
 
   // Preview Modal state
   const [previewMessage, setPreviewMessage] = useState<ChatMessage | null>(null);
@@ -3822,7 +4000,7 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
 
 
           {/* Editor Content Area wrapper with Device Layout class */}
-          <div className="flex-1 overflow-y-auto p-8 flex justify-center bg-[#f5efe4]">
+          <div ref={editorViewportRef} className="flex-1 overflow-y-auto p-8 flex justify-center bg-[#f5efe4]">
             <div
               className={`h-fit blog-paper rounded-2xl px-10 py-12 transition-all duration-300 ${
                 deviceLayout === 'desktop'
@@ -3919,6 +4097,7 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
 
                   {/* Editable Blog Blocks */}
                   <div
+                    ref={editorBlocksRef}
                     className="relative flex flex-col gap-5 blog-content"
                     onMouseMove={(e) => {
                       if (e.buttons !== 0) return;
@@ -3989,6 +4168,55 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
                         </button>
                       </div>
                     )}
+
+                    {/* Image Edit Controls (editor only) */}
+                    {imageControlAnchors.map((anchor) => (
+                      <div
+                        key={`image-control-${anchor.sectionId}`}
+                        className="absolute right-0 z-20 flex items-center gap-1.5 bg-white/95 backdrop-blur-sm pl-2 pr-8 rounded-lg shadow-sm border border-slate-200"
+                        style={{ top: `${anchor.top}px`, transform: 'translateY(-50%)' }}
+                      >
+                        <button
+                          onClick={() =>
+                            setActiveImageControlId((prev) =>
+                              prev === anchor.sectionId ? null : anchor.sectionId
+                            )
+                          }
+                          className="p-1.5 rounded-md border border-brand-primary/40 text-brand-primary hover:bg-brand-50 transition-colors"
+                          title="Change image"
+                        >
+                          <Icons.ImagePlus className="w-3.5 h-3.5" />
+                        </button>
+                        {activeImageControlId === anchor.sectionId && (
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={() => startImageUpload(anchor.sectionId)}
+                              className="px-2 py-1 text-[10px] font-semibold rounded-md border border-slate-300 text-slate-700 hover:bg-slate-100"
+                              title="Upload from device"
+                            >
+                              Upload
+                            </button>
+                            <button
+                              onClick={() => {
+                                void promptAndApplyImageLink(anchor.sectionId);
+                              }}
+                              className="px-2 py-1 text-[10px] font-semibold rounded-md border border-slate-300 text-slate-700 hover:bg-slate-100"
+                              title="Use image URL"
+                            >
+                              Link
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+
+                    <input
+                      ref={imageUploadInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={onImageUploadSelected}
+                    />
                   </div>
                 </>
               )}
@@ -4628,8 +4856,11 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
             </div>
 
             {/* Modal Body (Scrollable Document Preview) */}
-            <div className="flex-1 overflow-y-auto p-8 bg-[#f5efe4] flex justify-center">
-              <div ref={previewContentRef} className="w-full max-w-2xl blog-paper rounded-xl px-8 py-10 min-h-[500px]">
+            <div className="flex-1 overflow-y-auto p-8 bg-[#f5efe4]">
+              <div
+                ref={previewContentRef}
+                className="mx-auto w-full max-w-[820px] blog-paper blog-content rounded-2xl px-10 py-12 min-h-[500px]"
+              >
                 {/* Preview Blog Title */}
                 {(() => {
                   if (previewHasPersistedState) {
@@ -4783,7 +5014,7 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
                 <hr className="border-slate-200 mb-6" />
 
                 {/* Preview Blog Content */}
-                <div className="blog-content max-w-none text-[15px] leading-relaxed space-y-4">
+                <div className="max-w-none text-[15px] leading-relaxed space-y-4">
                   {previewHasPersistedState
                     ? (() => {
                         const maxLength = Math.max(previewBaseSections.length, previewPersistedSections.length);
@@ -5018,7 +5249,7 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
               JSON.stringify(beforeTitleStyle || {}) !== JSON.stringify(afterTitleStyle || {});
             const subtitleChanged = beforeSubtitle !== afterSubtitle;
             return (
-              <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[82vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden animate-slideUp">
+              <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[82vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden animate-slideUp">
                 <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
                   <div>
                     <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
@@ -5037,9 +5268,9 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
                   </button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-6 bg-[#f5efe4]">
-                  <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm flex flex-col gap-4">
-                    <div className="flex items-center justify-between text-xs border-b border-slate-100 pb-2">
+                <div className="flex-1 overflow-y-auto p-8 bg-[#f5efe4]">
+                  <div className="mx-auto w-full max-w-[820px] space-y-4">
+                    <div className="flex items-center justify-between text-xs">
                       <span className="font-bold text-slate-700">
                         {appliedAt ? new Date(appliedAt).toLocaleString() : 'Applied update'}
                       </span>
@@ -5054,72 +5285,70 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
                       )}
                     </div>
 
-                    <p className="text-[11px] text-slate-600 bg-slate-50 p-2 rounded whitespace-pre-wrap">
+                    <p className="text-[11px] text-slate-600 bg-white/80 border border-slate-200 p-2.5 rounded-lg whitespace-pre-wrap">
                       {sanitizeDisplayText(diff.explanation || message.text)}
                     </p>
 
-                    <div className="bg-[#f5efe4] border border-amber-100 rounded-xl p-3 max-h-[62vh] overflow-y-auto">
-                      <div className="blog-paper rounded-xl p-4 blog-content max-w-none space-y-3">
-                        {hasSnapshotPreview ? (
-                          <>
-                            {titleChanged ? (
-                              <div className="mb-2 space-y-2 preview-changed">
-                                <h1
-                                  className="blog-doc-title bg-red-100/80 border border-red-300 rounded-xl p-3"
-                                  style={toTextStyle(beforeTitleStyle)}
-                                >
-                                  {sanitizeDisplayText(beforeTitle)}
-                                </h1>
-                                <h1
-                                  className="blog-doc-title bg-emerald-100/80 border border-emerald-300 rounded-xl p-3"
-                                  style={toTextStyle(afterTitleStyle)}
-                                >
-                                  {sanitizeDisplayText(afterTitle || beforeTitle)}
-                                </h1>
-                              </div>
-                            ) : (
-                              <h1 className="blog-doc-title mb-2" style={toTextStyle(afterTitleStyle)}>
+                    <div className="blog-paper blog-content rounded-2xl px-10 py-12 max-w-none space-y-3">
+                      {hasSnapshotPreview ? (
+                        <>
+                          {titleChanged ? (
+                            <div className="mb-2 space-y-2 preview-changed">
+                              <h1
+                                className="blog-doc-title bg-red-100/80 border border-red-300 rounded-xl p-3"
+                                style={toTextStyle(beforeTitleStyle)}
+                              >
+                                {sanitizeDisplayText(beforeTitle)}
+                              </h1>
+                              <h1
+                                className="blog-doc-title bg-emerald-100/80 border border-emerald-300 rounded-xl p-3"
+                                style={toTextStyle(afterTitleStyle)}
+                              >
                                 {sanitizeDisplayText(afterTitle || beforeTitle)}
                               </h1>
-                            )}
+                            </div>
+                          ) : (
+                            <h1 className="blog-doc-title mb-2" style={toTextStyle(afterTitleStyle)}>
+                              {sanitizeDisplayText(afterTitle || beforeTitle)}
+                            </h1>
+                          )}
 
-                            {(beforeSubtitle || afterSubtitle) ? (
-                              subtitleChanged ? (
-                                <div className="mb-4 space-y-2 preview-changed">
-                                  <p className="blog-subtitle bg-red-100/80 border border-red-300 rounded-xl p-3">
-                                    {sanitizeDisplayText(beforeSubtitle || 'No subtitle.')}
-                                  </p>
-                                  <p className="blog-subtitle bg-emerald-100/80 border border-emerald-300 rounded-xl p-3">
-                                    {sanitizeDisplayText(afterSubtitle || 'No subtitle.')}
-                                  </p>
-                                </div>
-                              ) : (
-                                <p className="blog-subtitle mb-6">{sanitizeDisplayText(afterSubtitle || beforeSubtitle)}</p>
-                              )
-                            ) : null}
+                          {(beforeSubtitle || afterSubtitle) ? (
+                            subtitleChanged ? (
+                              <div className="mb-4 space-y-2 preview-changed">
+                                <p className="blog-subtitle bg-red-100/80 border border-red-300 rounded-xl p-3">
+                                  {sanitizeDisplayText(beforeSubtitle || 'No subtitle.')}
+                                </p>
+                                <p className="blog-subtitle bg-emerald-100/80 border border-emerald-300 rounded-xl p-3">
+                                  {sanitizeDisplayText(afterSubtitle || 'No subtitle.')}
+                                </p>
+                              </div>
+                            ) : (
+                              <p className="blog-subtitle mb-6">{sanitizeDisplayText(afterSubtitle || beforeSubtitle)}</p>
+                            )
+                          ) : null}
 
-                            {renderSnapshotDiffBlocks(
-                              beforeSectionsSnapshot as BlogSection[],
-                              afterSectionsSnapshot as BlogSection[],
-                              `history-preview-snapshot-${message.id}`,
-                              beforeSectionStyles,
-                              afterSectionStyles
-                            )}
-                          </>
-                        ) : (
-                          <div className="space-y-2 preview-changed">
-                            {renderHistoryTextDiffBlock(diff.originalText, `history-preview-${message.id}-original`, {
-                              sectionTypeHint,
-                              highlight: 'original',
-                            })}
-                            {renderHistoryTextDiffBlock(diff.suggestedText, `history-preview-${message.id}-new`, {
-                              sectionTypeHint,
-                              highlight: 'new',
-                              style: diff.suggestedStyle,
-                            })}
-                          </div>
-                        )}
-                      </div>
+                          {renderSnapshotDiffBlocks(
+                            beforeSectionsSnapshot as BlogSection[],
+                            afterSectionsSnapshot as BlogSection[],
+                            `history-preview-snapshot-${message.id}`,
+                            beforeSectionStyles,
+                            afterSectionStyles
+                          )}
+                        </>
+                      ) : (
+                        <div className="space-y-2 preview-changed">
+                          {renderHistoryTextDiffBlock(diff.originalText, `history-preview-${message.id}-original`, {
+                            sectionTypeHint,
+                            highlight: 'original',
+                          })}
+                          {renderHistoryTextDiffBlock(diff.suggestedText, `history-preview-${message.id}-new`, {
+                            sectionTypeHint,
+                            highlight: 'new',
+                            style: diff.suggestedStyle,
+                          })}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -5161,7 +5390,7 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
             const sectionStyleHint = sectionStyleMap[historyPreviewVersion.sectionId];
             const versionSnapshots = buildSectionVersionPreviewSnapshots(historyPreviewVersion);
             return (
-          <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[82vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden animate-slideUp">
+          <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[82vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden animate-slideUp">
             <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
               <div>
                 <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
@@ -5180,48 +5409,46 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-6 bg-[#f5efe4]">
-              <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm flex flex-col gap-4">
-                <div className="flex items-center justify-between text-xs border-b border-slate-100 pb-2">
+            <div className="flex-1 overflow-y-auto p-8 bg-[#f5efe4]">
+              <div className="mx-auto w-full max-w-[820px] space-y-4">
+                <div className="flex items-center justify-between text-xs">
                   <span className="font-bold text-slate-700">
                     {getSectionLabel(historyPreviewVersion.sectionId)}
                   </span>
-                  <span className="text-slate-400">
+                  <span className="text-slate-500">
                     {new Date(historyPreviewVersion.createdAt).toLocaleString()}
                   </span>
                 </div>
 
-                <div className="bg-[#f5efe4] border border-amber-100 rounded-xl p-3 max-h-[62vh] overflow-y-auto">
-                  <div className="blog-paper rounded-xl p-4 blog-content max-w-none space-y-3">
-                    {versionSnapshots ? (
-                      <>
-                        <h1 className="blog-doc-title mb-2">{sanitizeDisplayText(localBlog.title)}</h1>
-                        {sanitizeDisplayText(localBlog.subtitle || '') ? (
-                          <p className="blog-subtitle mb-6">{sanitizeDisplayText(localBlog.subtitle || '')}</p>
-                        ) : null}
-                        {renderSnapshotDiffBlocks(
-                          versionSnapshots.beforeSections,
-                          versionSnapshots.afterSections,
-                          `history-modal-snapshot-${historyPreviewVersion.id}`,
-                          versionSnapshots.beforeSectionStyles,
-                          versionSnapshots.afterSectionStyles
-                        )}
-                      </>
-                    ) : (
-                      <div className="space-y-2 preview-changed">
-                        {renderHistoryTextDiffBlock(
-                          historyPreviewVersion.originalText,
-                          `history-modal-${historyPreviewVersion.id}-raw-old`,
-                          { sectionTypeHint, highlight: 'original' }
-                        )}
-                        {renderHistoryTextDiffBlock(
-                          historyPreviewVersion.editedText,
-                          `history-modal-${historyPreviewVersion.id}-raw-new`,
-                          { sectionTypeHint, highlight: 'new', style: sectionStyleHint }
-                        )}
-                      </div>
-                    )}
-                  </div>
+                <div className="blog-paper blog-content rounded-2xl px-10 py-12 max-w-none space-y-3">
+                  {versionSnapshots ? (
+                    <>
+                      <h1 className="blog-doc-title mb-2">{sanitizeDisplayText(localBlog.title)}</h1>
+                      {sanitizeDisplayText(localBlog.subtitle || '') ? (
+                        <p className="blog-subtitle mb-6">{sanitizeDisplayText(localBlog.subtitle || '')}</p>
+                      ) : null}
+                      {renderSnapshotDiffBlocks(
+                        versionSnapshots.beforeSections,
+                        versionSnapshots.afterSections,
+                        `history-modal-snapshot-${historyPreviewVersion.id}`,
+                        versionSnapshots.beforeSectionStyles,
+                        versionSnapshots.afterSectionStyles
+                      )}
+                    </>
+                  ) : (
+                    <div className="space-y-2 preview-changed">
+                      {renderHistoryTextDiffBlock(
+                        historyPreviewVersion.originalText,
+                        `history-modal-${historyPreviewVersion.id}-raw-old`,
+                        { sectionTypeHint, highlight: 'original' }
+                      )}
+                      {renderHistoryTextDiffBlock(
+                        historyPreviewVersion.editedText,
+                        `history-modal-${historyPreviewVersion.id}-raw-new`,
+                        { sectionTypeHint, highlight: 'new', style: sectionStyleHint }
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

@@ -103,6 +103,39 @@ const SUMMARY_HEADING_PATTERN =
   /^(summary|conclusion|final thoughts|closing thoughts|wrap-up|wrap up|key takeaways)\b/i;
 const IMAGE_INTENT_PATTERN =
   /\b(image|images|photo|photos|visual|visuals|illustration|illustrations|infographic|infographics|diagram|diagrams|chart|charts|screenshot|screenshots|gallery)\b/i;
+const CTA_HEADING_PATTERN = /^(what to do next|next steps?|action plan|where to start)\b/i;
+
+type BlogMode = 'thought-leadership' | 'practical-how-to' | 'seo-pillar' | 'case-study';
+
+function detectBlogMode(request: GenerateBlogRequest): BlogMode {
+  const signal = `${request.blogType || ''} ${request.prompt || ''} ${request.seoKeywords || ''}`.toLowerCase();
+
+  if (
+    /\b(case study|case-study|client success|implementation result|growth story|customer story|postmortem|lessons learned)\b/.test(
+      signal
+    )
+  ) {
+    return 'case-study';
+  }
+
+  if (
+    /\b(how to|how-to|tutorial|step by step|step-by-step|workflow|implementation guide|playbook|checklist)\b/.test(
+      signal
+    )
+  ) {
+    return 'practical-how-to';
+  }
+
+  if (
+    /\b(seo|pillar|complete guide|ultimate guide|comprehensive guide|beginner to advanced|everything you need to know)\b/.test(
+      signal
+    )
+  ) {
+    return 'seo-pillar';
+  }
+
+  return 'thought-leadership';
+}
 
 function normalizeHeadingHierarchy(sections: BlogSection[]): BlogSection[] {
   return sections.map((section) => {
@@ -488,6 +521,310 @@ function ensureHeadingBodyRhythm(sections: BlogSection[]): BlogSection[] {
   return next;
 }
 
+function topicSeed(request: GenerateBlogRequest): string {
+  return singleLine(request.prompt || request.blogType || 'this topic').slice(0, 140) || 'this topic';
+}
+
+function countListLines(text: string, type: 'numbered' | 'bullet'): number {
+  const lines = normalizeLayoutText(text)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (type === 'numbered') {
+    return lines.filter((line) => /^\d+[.)]\s+/.test(line)).length;
+  }
+  return lines.filter((line) => /^[-*]\s+/.test(line)).length;
+}
+
+function hasNumberedFramework(sections: BlogSection[]): boolean {
+  return sections.some((section) => section.type === 'paragraph' && countListLines(section.text || '', 'numbered') >= 3);
+}
+
+function hasChecklist(sections: BlogSection[]): boolean {
+  return sections.some((section) => section.type === 'paragraph' && countListLines(section.text || '', 'bullet') >= 3);
+}
+
+function findInsertBeforeSummary(sections: BlogSection[]): number {
+  const summaryIdx = sections.findIndex(
+    (section) => section.type === 'heading' && SUMMARY_HEADING_PATTERN.test(normalizeLayoutText(section.text || ''))
+  );
+  return summaryIdx >= 0 ? summaryIdx : sections.length;
+}
+
+function ensureOpeningNarrative(
+  sections: BlogSection[],
+  request: GenerateBlogRequest
+): BlogSection[] {
+  const next = [...sections];
+  const earlyParagraphCount = next
+    .slice(0, 5)
+    .filter((section) => section.type === 'paragraph' && normalizeLayoutText(section.text || '').length >= 70).length;
+
+  if (earlyParagraphCount >= 1) return next;
+
+  const seed = topicSeed(request);
+  next.unshift({
+    id: randomUUID(),
+    type: 'paragraph',
+    text: normalizeLayoutText(
+      `${seed} is now a strategic priority, but most teams still operate without a clear execution model. This guide frames the core problem, clarifies the decisions that matter, and maps a practical path from idea to measurable outcomes.`
+    ),
+    level: undefined,
+    caption: '',
+    url: '',
+  });
+
+  return next;
+}
+
+function ensureModeSignatureSections(
+  sections: BlogSection[],
+  mode: BlogMode,
+  request: GenerateBlogRequest
+): BlogSection[] {
+  const next = [...sections];
+  const headingTitles = new Set(
+    next
+      .filter((section) => section.type === 'heading')
+      .map((section) => normalizeLayoutText(section.text || '').toLowerCase())
+  );
+  const insertAt = Math.max(2, Math.min(findInsertBeforeSummary(next), next.length));
+  const seed = topicSeed(request);
+
+  const addHeadingAndParagraph = (heading: string, paragraph: string) => {
+    next.splice(insertAt, 0,
+      {
+        id: randomUUID(),
+        type: 'heading',
+        text: heading,
+        level: 2,
+        caption: '',
+        url: '',
+      },
+      {
+        id: randomUUID(),
+        type: 'paragraph',
+        text: normalizeLayoutText(paragraph),
+        level: undefined,
+        caption: '',
+        url: '',
+      });
+  };
+
+  if (mode === 'practical-how-to') {
+    if (![...headingTitles].some((title) => title.includes('step-by-step framework'))) {
+      addHeadingAndParagraph(
+        'Step-by-Step Framework',
+        `Use a repeatable execution loop for ${seed}: diagnose the current state, prioritize the highest-leverage actions, implement in short cycles, and track outcomes against clear quality metrics.`
+      );
+    }
+    return next;
+  }
+
+  if (mode === 'seo-pillar') {
+    if (![...headingTitles].some((title) => title.includes('complete guide framework'))) {
+      addHeadingAndParagraph(
+        'Complete Guide Framework',
+        `Treat ${seed} as an ecosystem topic: cover fundamentals, implementation patterns, common mistakes, and advanced optimization strategies so readers can move from awareness to execution in one resource.`
+      );
+    }
+    return next;
+  }
+
+  if (mode === 'case-study') {
+    if (![...headingTitles].some((title) => title.includes('what was tried'))) {
+      addHeadingAndParagraph(
+        'What Was Tried',
+        `The team prioritized one constrained pilot first, instrumented the workflow, and iterated in short cycles. This reduced adoption friction and made it easier to validate impact before scaling.`
+      );
+    }
+    if (![...headingTitles].some((title) => title.includes('lessons learned'))) {
+      addHeadingAndParagraph(
+        'Lessons Learned',
+        `The biggest lesson for ${seed} was that execution quality depended less on tools and more on operating discipline: clear ownership, explicit guardrails, and fast feedback loops.`
+      );
+    }
+    return next;
+  }
+
+  if (![...headingTitles].some((title) => title.includes('final takeaway'))) {
+    addHeadingAndParagraph(
+      'Final Takeaway',
+      `The long-term advantage in ${seed} comes from consistency: teams that translate strategy into repeatable workflows compound results faster than teams that rely on one-off wins.`
+    );
+  }
+  return next;
+}
+
+function ensureFrameworkAndChecklist(
+  sections: BlogSection[],
+  mode: BlogMode,
+  request: GenerateBlogRequest
+): BlogSection[] {
+  const next = [...sections];
+  const insertAt = findInsertBeforeSummary(next);
+  const seed = topicSeed(request);
+
+  if (!hasNumberedFramework(next)) {
+    const frameworkText =
+      mode === 'case-study'
+        ? `1. Define baseline metrics and constraints for ${seed}.\n2. Run one controlled pilot and capture operational evidence.\n3. Scale only what proves durable impact.`
+        : mode === 'seo-pillar'
+          ? `1. Map user intent and subtopics for ${seed}.\n2. Build section-level depth with clear internal structure.\n3. Refresh the guide using performance and query data.`
+          : `1. Clarify the target outcome for ${seed}.\n2. Deploy the workflow in a small measurable scope.\n3. Iterate based on quality, speed, and business impact.`;
+
+    next.splice(insertAt, 0,
+      {
+        id: randomUUID(),
+        type: 'heading',
+        text: mode === 'practical-how-to' ? 'Execution Steps' : 'Action Framework',
+        level: 2,
+        caption: '',
+        url: '',
+      },
+      {
+        id: randomUUID(),
+        type: 'paragraph',
+        text: frameworkText,
+        level: undefined,
+        caption: '',
+        url: '',
+      });
+  }
+
+  if (!hasChecklist(next)) {
+    const checklistText =
+      mode === 'thought-leadership'
+        ? '- Align leaders on one clear point of view.\n- Back arguments with concrete evidence.\n- Convert strategy into team-level operating actions.'
+        : '- Define ownership and timeline before rollout.\n- Validate quality with a measurable acceptance bar.\n- Capture results and feed them into the next iteration.';
+
+    const checklistInsertAt = findInsertBeforeSummary(next);
+    next.splice(checklistInsertAt, 0,
+      {
+        id: randomUUID(),
+        type: 'heading',
+        text: 'Execution Checklist',
+        level: 2,
+        caption: '',
+        url: '',
+      },
+      {
+        id: randomUUID(),
+        type: 'paragraph',
+        text: checklistText,
+        level: undefined,
+        caption: '',
+        url: '',
+      });
+  }
+
+  return next;
+}
+
+function ensureExampleAndComparison(
+  sections: BlogSection[],
+  mode: BlogMode
+): BlogSection[] {
+  const next = [...sections];
+  const headings = new Set(
+    next
+      .filter((section) => section.type === 'heading')
+      .map((section) => normalizeLayoutText(section.text || '').toLowerCase())
+  );
+
+  if (![...headings].some((title) => /\b(example|case)\b/.test(title))) {
+    const insertAt = findInsertBeforeSummary(next);
+    next.splice(insertAt, 0,
+      {
+        id: randomUUID(),
+        type: 'heading',
+        text: mode === 'case-study' ? 'Case Snapshot' : 'Practical Example',
+        level: 2,
+        caption: '',
+        url: '',
+      },
+      {
+        id: randomUUID(),
+        type: 'paragraph',
+        text: normalizeLayoutText(
+          'Example: one cross-functional team started with a narrow pilot, documented decisions in a shared runbook, and improved quality each cycle by reviewing what changed and why.'
+        ),
+        level: undefined,
+        caption: '',
+        url: '',
+      });
+  }
+
+  if (mode !== 'case-study' && ![...headings].some((title) => /\b(comparison|pros|cons)\b/.test(title))) {
+    const insertAt = findInsertBeforeSummary(next);
+    next.splice(insertAt, 0,
+      {
+        id: randomUUID(),
+        type: 'heading',
+        text: 'Comparison: Common Approaches',
+        level: 2,
+        caption: '',
+        url: '',
+      },
+      {
+        id: randomUUID(),
+        type: 'paragraph',
+        text:
+          '- Fast but unmanaged approach: quick output, high inconsistency risk.\n- Structured approach: slower setup, stronger repeatability and safer scale.\n- Best fit: combine speed with clear quality guardrails.',
+        level: undefined,
+        caption: '',
+        url: '',
+      });
+  }
+
+  return next;
+}
+
+function ensureClosingCta(
+  sections: BlogSection[],
+  request: GenerateBlogRequest
+): BlogSection[] {
+  const next = [...sections];
+  const hasCtaHeading = next.some(
+    (section) => section.type === 'heading' && CTA_HEADING_PATTERN.test(normalizeLayoutText(section.text || ''))
+  );
+  if (hasCtaHeading) return next;
+
+  const seed = topicSeed(request);
+  next.push(
+    {
+      id: randomUUID(),
+      type: 'heading',
+      text: 'What to Do Next',
+      level: 2,
+      caption: '',
+      url: '',
+    },
+    {
+      id: randomUUID(),
+      type: 'callout',
+      text: normalizeLayoutText(
+        `Next Step: choose one high-impact workflow for ${seed}, run a focused implementation sprint this week, and publish the first measurable outcome to build momentum.`
+      ),
+      level: undefined,
+      caption: '',
+      url: '',
+    }
+  );
+  return next;
+}
+
+function positionHeroImageNearTop(sections: BlogSection[]): BlogSection[] {
+  const next = [...sections];
+  const firstImageIdx = next.findIndex((section) => section.type === 'image');
+  if (firstImageIdx < 0 || firstImageIdx <= 4) return next;
+
+  const [hero] = next.splice(firstImageIdx, 1);
+  const insertAt = Math.min(3, next.length);
+  next.splice(insertAt, 0, hero);
+  return next;
+}
+
 function buildProfessionalSubtitle(
   rawSubtitle: unknown,
   title: string,
@@ -555,14 +892,21 @@ function enforceEditorialLayout(
   request: GenerateBlogRequest,
   fallbackSeed: string
 ): BlogSection[] {
+  const mode = detectBlogMode(request);
   const polished = polishNarrativeSections(sections);
   const withHierarchy = normalizeHeadingHierarchy(polished);
-  const withExecutiveSummary = ensureExecutiveSummarySection(withHierarchy);
+  const withOpening = ensureOpeningNarrative(withHierarchy, request);
+  const withExecutiveSummary = ensureExecutiveSummarySection(withOpening);
   const withToc = ensureTableOfContentsSection(withExecutiveSummary);
-  const withCallout = ensureCalloutSection(withToc);
+  const withModeSignature = ensureModeSignatureSections(withToc, mode, request);
+  const withFrameworkChecklist = ensureFrameworkAndChecklist(withModeSignature, mode, request);
+  const withExampleComparison = ensureExampleAndComparison(withFrameworkChecklist, mode);
+  const withCallout = ensureCalloutSection(withExampleComparison);
   const withRhythm = ensureHeadingBodyRhythm(withCallout);
   const withSummary = ensureSummarySection(withRhythm);
-  return ensureImageCoverage(withSummary, request, fallbackSeed);
+  const withCta = ensureClosingCta(withSummary, request);
+  const withImages = ensureImageCoverage(withCta, request, fallbackSeed);
+  return positionHeroImageNearTop(withImages);
 }
 
 function buildGeneratedBlogFromParsed(parsed: any, request: GenerateBlogRequest): GeneratedBlogData {
@@ -678,6 +1022,16 @@ function validateGeneratedBlog(
   const headingSections = generated.sections.filter(
     (s) => s.type === 'heading' && normalizeLayoutText(s.text || '').length >= 4
   );
+  const hasOpeningParagraph = generated.sections
+    .slice(0, 5)
+    .some((s) => s.type === 'paragraph' && normalizeLayoutText(s.text || '').length >= 70);
+  const hasFramework = hasNumberedFramework(generated.sections);
+  const hasChecklistBlock = hasChecklist(generated.sections);
+  const hasClosingCta = generated.sections.some(
+    (s) =>
+      (s.type === 'heading' && CTA_HEADING_PATTERN.test(normalizeLayoutText(s.text || ''))) ||
+      (s.type === 'callout' && /next step|action/i.test(normalizeLayoutText(s.text || '')))
+  );
 
   if (generated.sections.length < (minSectionsByLength[request.length] || 6)) {
     return { ok: false, reason: 'too few sections' };
@@ -685,6 +1039,10 @@ function validateGeneratedBlog(
   if (textSections.length < 4) return { ok: false, reason: 'too few textual sections' };
   if (paragraphSections.length < 2) return { ok: false, reason: 'too few paragraphs' };
   if (headingSections.length < 2) return { ok: false, reason: 'too few headings' };
+  if (!hasOpeningParagraph) return { ok: false, reason: 'missing strong opening narrative' };
+  if (!hasFramework) return { ok: false, reason: 'missing numbered framework section' };
+  if (!hasChecklistBlock) return { ok: false, reason: 'missing checklist section' };
+  if (!hasClosingCta) return { ok: false, reason: 'missing closing next-step CTA' };
 
   const words = computeWordCount(generated.sections);
   if (words < (minWordsByLength[request.length] || 220)) {

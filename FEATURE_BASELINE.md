@@ -43,6 +43,18 @@ Future development should preserve all behaviors listed here.
   - heading-to-body rhythm is normalized (major headings are followed by explanatory body copy)
   - summary/conclusion section is ensured when missing
   - callout/key-insight section is ensured when missing
+- Enforces professional composition rhythm:
+  - hero quality (title/subtitle with optional hero image near top),
+  - opening narrative hook and problem framing,
+  - mixed main body blocks (framework, checklist, example, comparison),
+  - explicit ending with next-step CTA.
+- Mode-aware generation baseline:
+  - generator auto-selects one mode per prompt:
+    - `thought-leadership`
+    - `practical-how-to`
+    - `seo-pillar`
+    - `case-study`
+  - mode signature sections are injected/normalized when missing so structure stays production-grade.
 - Image policy is enforced:
   - default generation keeps image volume minimal (target 1 image unless visual-heavy prompt is explicit)
   - explicit visual prompts can scale to multiple image sections by requested depth/length
@@ -231,12 +243,14 @@ Future development should preserve all behaviors listed here.
   - keeps section order and spacing for publication-ready output
 
 ### 16. Sidebar published blogs section
-- Sidebar now contains a dedicated `Published Blogs` section.
-- It lists up to recent 10 blogs with persisted Dev.to links.
-- Each row includes:
-  - preview button (opens blog in editor)
-  - open-link button (opens published URL in new tab)
-- Empty-state guidance appears when no blog has been published yet.
+- Sidebar now contains a dedicated single navigation option: `Published Blogs`.
+- Clicking this option opens a full `Published Blogs` page (grid cards), not an inline sidebar list.
+- Published blogs page card baseline:
+  - title + subtitle + snippet preview
+  - core metrics (words/read-time/SEO)
+  - open in editor action
+  - open published link action
+  - empty state when no published blogs exist
 
 ## API Surface Baseline
 
@@ -294,6 +308,10 @@ Located in `scratch/`:
 - Selected-scope matrix:
   - strict selection-scoped updates remain constrained to selected text/field
   - no unintended full-document replacements under scoped mode.
+- Generation mode smoke:
+  - thought-leadership prompt returns framework + checklist + next-step CTA
+  - practical-how-to prompt returns framework + checklist + next-step CTA
+  - case-study prompt returns framework + checklist + next-step CTA
 
 ## Pre-merge Non-Break Checklist
 Before merging any feature touching chat/editor/generation:
@@ -340,6 +358,8 @@ Before merging any feature touching chat/editor/generation:
 - Publish/export codepath compile check:
   - Dev.to publish route: **pass**
   - Markdown/HTML/PDF export route: **pass**
+- Generation quality smoke re-run: **pass** (thought-leadership, how-to, case-study)
+- Published blogs navigation update: **pass** (sidebar option -> dedicated grid page)
 - Latest validated evidence and regression notes are tracked in:
   - `30 testcases.md`
   - `20 testcases.md`

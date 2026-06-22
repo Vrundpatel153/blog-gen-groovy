@@ -83,6 +83,17 @@ Last updated: 2026-06-22
 - Ensure heading-to-body rhythm (avoid long runs of heading-only structure).
 - Keep title-to-heading visual hierarchy balanced (title always dominant).
 - Avoid filler text and generic statements.
+- Enforce professional composition rhythm:
+  - Hero: strong title + subtitle (+ optional cover image near top),
+  - Opening: clear hook + problem framing,
+  - Main body: mixed blocks (framework steps, checklist, example, comparison),
+  - Ending: conclusion + explicit next-step CTA.
+- Select and apply a generation mode per request:
+  - `thought-leadership`
+  - `practical-how-to`
+  - `seo-pillar`
+  - `case-study`
+- Mode-aware sections must be visible in final output, not only in prompt intent.
 
 ### 8. Publishing and Export Reliability
 - Dev.to publishing must use backend-only `DEVTO_API_KEY` (never expose key in frontend).
@@ -102,6 +113,7 @@ Last updated: 2026-06-22
   - `src/components/BlogEditorView.tsx`
   - `src/components/Sidebar.tsx`
   - `src/components/CreateBlogView.tsx`
+  - `src/components/PublishedBlogsView.tsx`
   - `src/App.tsx`
 - Backend chat logic:
   - `server/src/services/chatAssistant.ts`
@@ -147,6 +159,11 @@ Run all before merging:
 - `node scratch/workflow_agentic_full_check.mjs`
 - `node scratch/full_quality_matrix_30.mjs`
 - `node scratch/selected_scope_matrix_30.mjs`
+- generation mode sanity:
+  - thought-leadership prompt
+  - practical how-to prompt
+  - case-study prompt
+  - verify each includes framework list + checklist + next-step CTA
 
 ## Manual Smoke Checklist
 1. Generate a new blog with images.
@@ -210,6 +227,9 @@ Run all before merging:
 - List formatting reliability is now part of baseline:
   - multiline list-like content in chat/history/preview is rendered as proper list UI,
   - numbered-list prompts are reinforced in backend to preserve numbered output shape.
+- Generation quality hardening validated:
+  - three live generation smoke tests (thought leadership, how-to, case-study) passed,
+  - outputs included numbered framework, bullet checklist, and explicit closing next-step CTA.
 
 ## Current Quality Guarantees
 - Replace/preview/revert path parity:
