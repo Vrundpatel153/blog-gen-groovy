@@ -1,6 +1,6 @@
 # AI Agent Skills + Context
 
-Last updated: 2026-06-19
+Last updated: 2026-06-22
 
 ## Project Intent
 - Build a production-grade AI blog editor where generation and chat edits are precise, traceable, and safe.
@@ -159,3 +159,33 @@ Run all before merging:
 - Manual editing remains smooth and uninterrupted.
 - Images render consistently in both editor and preview.
 - Theme boundaries remain intact (cream blog document vs neutral shell/chat/sidebar).
+
+## Latest Verified State (2026-06-22)
+- Full runtime health rechecked:
+  - frontend reachable on local dev URL,
+  - backend health endpoint returns success.
+- Full 30-prompt QA matrix re-run with pass result:
+  - total: 30,
+  - pass: 30,
+  - fail: 0.
+- Live browser QA re-run for the critical user path:
+  - generate blog,
+  - scoped chat edit,
+  - preview,
+  - replace,
+  - revert,
+  - history preview and history cards.
+- Scoped diff fidelity hardening is now part of baseline:
+  - chat diff cards keep scoped original/suggested content (no full-document flattening after apply/revert),
+  - history cards and history preview retain structure for list-like edits.
+- List formatting reliability is now part of baseline:
+  - multiline list-like content in chat/history/preview is rendered as proper list UI,
+  - numbered-list prompts are reinforced in backend to preserve numbered output shape.
+
+## Current Quality Guarantees
+- Replace/preview/revert path parity:
+  - preview and apply use consistent target mapping behavior for the same suggestion.
+- List-sensitive change safety:
+  - list rewrites remain list-formatted through chat diff, preview, apply, and revert.
+- Scope integrity:
+  - selected-field workflows remain strict and do not leak edits to unrelated sections.

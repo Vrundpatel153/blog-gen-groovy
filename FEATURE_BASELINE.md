@@ -1,6 +1,6 @@
 # AI Blog Studio Feature Baseline
 
-Last updated: 2026-06-19
+Last updated: 2026-06-22
 
 ## Purpose
 This document is the current "do-not-break" baseline for blog generation, chat editing, preview, apply/replace, persistence, and revert flows.
@@ -99,6 +99,9 @@ Future development should preserve all behaviors listed here.
 - Diff card rendering is list-aware:
   - ordered and bullet content renders as real list UI instead of paragraph fallback
   - original/suggested blocks show full content in fixed-height scrollable panes (no ellipsis clipping)
+- Diff card scope fidelity is enforced:
+  - applied/reverted messages keep scoped original/suggested content
+  - no fallback to full-document flattened card content for scoped edits
 - Preview modal renders in-document position diffs with highlights:
   - old/original: light red
   - new/suggested: light green
@@ -164,6 +167,10 @@ Future development should preserve all behaviors listed here.
 ### 11. Long-prompt replacement fidelity
 - For replacement actions, directive lead-ins like "replace with exactly this numbered list only:" are stripped from stored suggested text when list content follows.
 - Replacement payload normalization preserves intended list-only edits and avoids instruction echo duplication in chat diff cards.
+- Numbered-list intent enforcement supports both:
+  - `editor_ops`
+  - `edit_section`
+- Numbered-list coercion now supports explicit list-count prompts (for example: "3 points", "three points") and reconstructs numbered output when model text is weakly formatted.
 
 ### 12. Theme and color boundary baseline
 - Theme split is intentional and must be preserved:
@@ -268,6 +275,21 @@ Before merging any feature touching chat/editor/generation:
 8. Confirm subtitle appears and persists in:
    - main editor header area
    - preview modal (including snapshot-based history previews).
+9. Confirm scoped chat diff card does not flatten to full-document content after Replace/Revert.
+10. Confirm list rewrite prompts remain list-formatted in:
+   - chat diff blocks
+   - preview modal
+   - history cards
+   - history preview modal.
+
+## Latest Validation Snapshot (2026-06-22)
+- Full QA matrix: **30/30 pass**.
+- Workflow lifecycle (version create/get/apply/rollback): **pass**.
+- Live UI scoped workflow (generate -> preview -> replace -> revert -> history): **pass**.
+- Latest validated evidence and regression notes are tracked in:
+  - `30 testcases.md`
+  - `20 testcases.md`
+  - `FULL_TEST_REPORT.md`
 
 ## Key Files Owning This Baseline
 - Backend:
