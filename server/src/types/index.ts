@@ -193,6 +193,21 @@ export interface ChatAssistantResponse {
   message: ChatMessage;
   actionType?: 'edit_section' | 'replace_all' | 'editor_ops' | 'none';
   actionData?: Record<string, unknown>;
+  meta?: {
+    tokenUsage?: {
+      promptTokens?: number;
+      completionTokens?: number;
+      totalTokens: number;
+    };
+    contextPlan?: {
+      mode: 'full' | 'focused' | 'targeted';
+      reason: string;
+      totalSections: number;
+      promptSections: number;
+    };
+    model?: string;
+    latencyMs?: number;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -215,6 +230,8 @@ export interface AICompletionResult {
   content: string;
   model: string;
   tokensUsed: number;
+  promptTokens?: number;
+  completionTokens?: number;
   finishReason: string;
 }
 

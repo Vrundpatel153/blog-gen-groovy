@@ -35,6 +35,16 @@ interface ChatMessage {
   actionData?: any;
 }
 
+interface MessageTokenUsage {
+  totalTokens: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  model?: string;
+  contextMode?: 'full' | 'focused' | 'targeted';
+  contextSections?: number;
+  totalSections?: number;
+}
+
 interface TitleStyleState {
   color?: string;
   italic?: boolean;
@@ -212,6 +222,50 @@ const normalizeLayoutText = (value: unknown): string => {
   normalized = lines.join('\n');
 
   return normalized.trim();
+};
+
+const toFiniteNumber = (value: unknown): number | null => {
+  const num = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(num)) return null;
+  return num;
+};
+
+const extractMessageTokenUsage = (message?: ChatMessage): MessageTokenUsage | null => {
+  if (!message?.actionData || typeof message.actionData !== 'object') return null;
+  const meta = (message.actionData as any).__meta || (message.actionData as any).meta || {};
+  const tokenUsageRaw = meta?.tokenUsage || (message.actionData as any).tokenUsage;
+  if (!tokenUsageRaw || typeof tokenUsageRaw !== 'object') return null;
+
+  const totalTokens = toFiniteNumber((tokenUsageRaw as any).totalTokens);
+  if (totalTokens === null || totalTokens < 0) return null;
+  const promptTokens = toFiniteNumber((tokenUsageRaw as any).promptTokens);
+  const completionTokens = toFiniteNumber((tokenUsageRaw as any).completionTokens);
+
+  const contextPlan = meta?.contextPlan || {};
+  const contextMode =
+    contextPlan?.mode === 'full' || contextPlan?.mode === 'focused' || contextPlan?.mode === 'targeted'
+      ? (contextPlan.mode as MessageTokenUsage['contextMode'])
+      : undefined;
+  const contextSections = toFiniteNumber(contextPlan?.promptSections);
+  const totalSections = toFiniteNumber(contextPlan?.totalSections);
+  const model = sanitizePlainText(meta?.model || '');
+
+  return {
+    totalTokens: Math.max(0, Math.round(totalTokens)),
+    ...(promptTokens !== null && promptTokens >= 0 ? { promptTokens: Math.round(promptTokens) } : {}),
+    ...(completionTokens !== null && completionTokens >= 0
+      ? { completionTokens: Math.round(completionTokens) }
+      : {}),
+    ...(model ? { model } : {}),
+    ...(contextMode ? { contextMode } : {}),
+    ...(contextSections !== null && contextSections >= 0 ? { contextSections: Math.round(contextSections) } : {}),
+    ...(totalSections !== null && totalSections >= 0 ? { totalSections: Math.round(totalSections) } : {}),
+  };
+};
+
+const formatTokenCount = (value: number | undefined): string => {
+  if (!Number.isFinite(value as number)) return '0';
+  return new Intl.NumberFormat('en-US').format(Math.max(0, Math.round(value as number)));
 };
 
 type ParsedList =
@@ -665,6 +719,7 @@ export const BlogEditorView: React.FC<BlogEditorViewProps> = ({
   const [isTyping, setIsTyping] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
+  const [ambiguitySelectionByMessageId, setAmbiguitySelectionByMessageId] = useState<Record<string, any>>({});
   const [selectedEditorScope, setSelectedEditorScope] = useState<SelectedEditorScope>({
     field: null,
     sectionId: null,
@@ -1443,6 +1498,42 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages, isTyping]);
+
+  const promptUsageByUserMessageId = useMemo(() => {
+    const usageMap = new Map<string, MessageTokenUsage>();
+    for (let i = 0; i < chatMessages.length; i += 1) {
+      const current = chatMessages[i];
+      if (current.sender !== 'user') continue;
+      for (let j = i + 1; j < chatMessages.length; j += 1) {
+        const candidate = chatMessages[j];
+        if (candidate.sender !== 'assistant') continue;
+        const usage = extractMessageTokenUsage(candidate);
+        if (usage) usageMap.set(current.id, usage);
+        break;
+      }
+    }
+    return usageMap;
+  }, [chatMessages]);
+
+  const latestAssistantTokenUsage = useMemo(() => {
+    for (let idx = chatMessages.length - 1; idx >= 0; idx -= 1) {
+      const message = chatMessages[idx];
+      if (message.sender !== 'assistant') continue;
+      const usage = extractMessageTokenUsage(message);
+      if (usage) return usage;
+    }
+    return null;
+  }, [chatMessages]);
+
+  const totalSessionTokens = useMemo(
+    () =>
+      chatMessages.reduce((sum, message) => {
+        if (message.sender !== 'assistant') return sum;
+        const usage = extractMessageTokenUsage(message);
+        return usage ? sum + usage.totalTokens : sum;
+      }, 0),
+    [chatMessages]
+  );
 
   // Auto-scroll preview to first changed area
   useEffect(() => {
@@ -2292,6 +2383,106 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
     }
   };
 
+  const getAmbiguityOptionKey = (msgId: string, option: any): string =>
+    `${msgId}:${sanitizePlainText(option?.sectionId || '')}:${sanitizePlainText(String(option?.occurrence ?? ''))}`;
+
+  const scrollToAndHighlightSection = (sectionId: string) => {
+    if (!sectionId) return;
+    const escaped =
+      typeof (window as any).CSS?.escape === 'function'
+        ? (window as any).CSS.escape(sectionId)
+        : sectionId.replace(/["\\]/g, '\\$&');
+    const root = editorViewportRef.current || (editor?.view?.dom as HTMLElement | undefined);
+    if (!root) return;
+    const target = root.querySelector(
+      `[id="${escaped}"], [data-id="${escaped}"]`
+    ) as HTMLElement | null;
+    if (!target) return;
+
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const prevTransition = target.style.transition;
+    const prevBoxShadow = target.style.boxShadow;
+    const prevBg = target.style.backgroundColor;
+    target.style.transition = 'box-shadow 180ms ease, background-color 180ms ease';
+    target.style.boxShadow = '0 0 0 3px rgba(59,130,246,0.85), 0 0 0 9px rgba(59,130,246,0.20)';
+    target.style.backgroundColor = 'rgba(59,130,246,0.10)';
+    window.setTimeout(() => {
+      target.style.boxShadow = prevBoxShadow;
+      target.style.backgroundColor = prevBg;
+      target.style.transition = prevTransition;
+    }, 1800);
+  };
+
+  const handlePreviewAmbiguousTarget = (msg: ChatMessage, option: any) => {
+    if (!msg?.id || !option || typeof option !== 'object') return;
+    const sectionId = sanitizePlainText(option.sectionId || '');
+    if (!sectionId) return;
+    const meta =
+      msg.actionData && typeof msg.actionData === 'object' && msg.actionData.__meta
+        ? msg.actionData.__meta
+        : null;
+    const sectionScopeText = getSectionScopeText(sectionId);
+    const snippet = normalizeLayoutText(option.matchedSnippet || meta?.snippet || '');
+    const snippetComparable = normalizeComparableText(snippet);
+    const sectionComparable = normalizeComparableText(sectionScopeText);
+    const scopedText =
+      snippet && snippetComparable && sectionComparable.includes(snippetComparable)
+        ? snippet
+        : sectionScopeText;
+
+    updateSelectedEditorScope({
+      field: 'section',
+      sectionId,
+      text: scopedText || sectionScopeText,
+    });
+    setActiveSectionId(sectionId);
+    scrollToAndHighlightSection(sectionId);
+    setAmbiguitySelectionByMessageId((prev) => ({ ...prev, [msg.id]: option }));
+  };
+
+  const handleResolveAmbiguousTarget = async (msg: ChatMessage) => {
+    if (!msg?.id) return;
+    const option = ambiguitySelectionByMessageId[msg.id];
+    if (!option || typeof option !== 'object') return;
+
+    const meta =
+      msg.actionData && typeof msg.actionData === 'object' && msg.actionData.__meta
+        ? msg.actionData.__meta
+        : null;
+    if (!meta || meta.resolvedAt) return;
+
+    const sectionId = sanitizePlainText(option.sectionId || '');
+    if (!sectionId) return;
+
+    const nextActionData = {
+      ...(msg.actionData || {}),
+      __meta: {
+        ...(meta || {}),
+        resolvedAt: new Date().toISOString(),
+        resolvedSectionId: sectionId,
+      },
+    };
+
+    setChatMessages((prev) =>
+      prev.map((entry) => (entry.id === msg.id ? { ...entry, actionData: nextActionData } : entry))
+    );
+
+    chatService
+      .updateMessageActionData(msg.id, {
+        actionData: nextActionData,
+      })
+      .catch((err) => console.warn('Failed to persist ambiguity resolution metadata:', err));
+
+    const replayPrompt = sanitizePlainText(meta.prompt || '');
+    if (!replayPrompt) return;
+    await handleSendChat(replayPrompt);
+    setAmbiguitySelectionByMessageId((prev) => {
+      const next = { ...prev };
+      delete next[msg.id];
+      return next;
+    });
+  };
+
   const normalizeAssistantActionData = (
     actionType: string | undefined,
     rawActionData: any,
@@ -2545,6 +2736,7 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
       const newThread = await chatService.createThread(blog.id, `Chat ${new Date().toLocaleDateString()}`);
       setThreadId(newThread.id);
       setChatMessages([]);
+      setAmbiguitySelectionByMessageId({});
     } catch (err) {
       console.error('Failed to create new thread:', err);
     }
@@ -4887,6 +5079,14 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
             </div>
             
             <div className="flex items-center gap-2">
+              <div className="hidden lg:flex flex-col items-end gap-0.5 mr-1">
+                <span className="text-[9px] text-slate-400">
+                  Live: {latestAssistantTokenUsage ? `${formatTokenCount(latestAssistantTokenUsage.totalTokens)} tokens` : '--'}
+                </span>
+                <span className="text-[9px] text-slate-500">
+                  Session: {formatTokenCount(totalSessionTokens)} tokens
+                </span>
+              </div>
               <button
                 onClick={handleNewChat}
                 className="flex items-center gap-1 py-1 px-2.5 bg-slate-900 border border-slate-700 hover:border-slate-500 text-slate-200 text-[10px] font-bold rounded-lg transition-all"
@@ -4906,6 +5106,24 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
             {chatMessages.map((msg) => {
               const isUser = msg.sender === 'user';
               const diffCard = !isUser && msg.showDiffCard && msg.actionData ? buildDiffCardContent(msg) : null;
+              const assistantUsage = !isUser ? extractMessageTokenUsage(msg) : null;
+              const promptUsage = isUser ? promptUsageByUserMessageId.get(msg.id) || null : null;
+              const disambiguationMeta =
+                !isUser &&
+                msg.actionData &&
+                typeof msg.actionData === 'object' &&
+                msg.actionData.__meta &&
+                msg.actionData.__meta.needsDisambiguation
+                  ? msg.actionData.__meta
+                  : null;
+              const disambiguationOptions = Array.isArray(disambiguationMeta?.options)
+                ? (disambiguationMeta.options as any[]).filter((option) => option && typeof option === 'object')
+                : [];
+              const disambiguationResolved = Boolean(disambiguationMeta?.resolvedAt);
+              const selectedAmbiguityOption = !isUser ? ambiguitySelectionByMessageId[msg.id] || null : null;
+              const selectedAmbiguityKey = selectedAmbiguityOption
+                ? getAmbiguityOptionKey(msg.id, selectedAmbiguityOption)
+                : '';
               const isReplaced = Boolean(msg.actionData?.appliedAt);
               const isReverted = Boolean(msg.actionData?.revertedAt);
               const isApplied = isReplaced && !isReverted;
@@ -4923,6 +5141,12 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
                       </div>
                       <span className="text-[10px] font-bold text-slate-100">AI Assistant</span>
                       <span className="text-[9px] text-slate-500">{msg.time}</span>
+                      {assistantUsage && (
+                        <span className="text-[9px] text-slate-400">
+                          {formatTokenCount(assistantUsage.totalTokens)} tokens
+                          {assistantUsage.contextMode ? ` • ${assistantUsage.contextMode}` : ''}
+                        </span>
+                      )}
                     </div>
                   )}
 
@@ -4939,8 +5163,86 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
                     </div>
                   )}
 
+                  {disambiguationMeta && disambiguationOptions.length > 1 && (
+                    <div className="w-full max-w-[95%] border border-[#3b4658] bg-[#111723] rounded-2xl p-3.5 shadow-sm flex flex-col gap-2.5">
+                      <div className="flex items-center gap-2 text-[11px] text-amber-200 font-semibold">
+                        <Icons.AlertTriangle className="w-3.5 h-3.5 text-amber-300" />
+                        <span>
+                          Multiple matches found for "{sanitizeDisplayText(disambiguationMeta.snippet || '')}".
+                          Choose the exact occurrence.
+                        </span>
+                      </div>
+                      <div className="flex flex-col gap-2">
+                        {disambiguationOptions.map((option, index) => {
+                          const sectionId = sanitizePlainText(option.sectionId || '');
+                          const sectionType = sanitizeDisplayText(option.sectionType || 'section');
+                          const occurrence = Number(option.occurrence || index + 1);
+                          const previewText = sanitizeDisplayText(option.previewText || '');
+                          const optionKey = getAmbiguityOptionKey(msg.id, option);
+                          const isSelected = optionKey === selectedAmbiguityKey;
+                          return (
+                            <button
+                              key={`${msg.id}-ambiguity-${sectionId || index}`}
+                              onClick={() => handlePreviewAmbiguousTarget(msg, option)}
+                              disabled={disambiguationResolved}
+                              className={`text-left border rounded-xl px-3 py-2.5 transition-all ${
+                                disambiguationResolved
+                                  ? 'border-slate-700 bg-[#121824] text-slate-500 cursor-not-allowed'
+                                  : isSelected
+                                    ? 'border-blue-400 bg-blue-900/25 text-slate-100'
+                                    : 'border-slate-600 bg-[#121a28] hover:border-blue-400 hover:bg-[#162133] text-slate-200'
+                              }`}
+                            >
+                              <div className="text-[11px] font-bold tracking-wide uppercase text-slate-300">
+                                Occurrence {Number.isFinite(occurrence) ? occurrence : index + 1} • {sectionType}
+                              </div>
+                              <div className="text-[12px] leading-relaxed text-slate-200 mt-1 whitespace-pre-wrap">
+                                {previewText || `Section ${sectionId || index + 1}`}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {!disambiguationResolved && (
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] text-slate-300">
+                            {selectedAmbiguityOption
+                              ? 'Selected occurrence previewed in editor. Click Choose this to continue.'
+                              : 'Click any occurrence to preview its location in the editor.'}
+                          </span>
+                          <button
+                            onClick={() => handleResolveAmbiguousTarget(msg)}
+                            disabled={!selectedAmbiguityOption}
+                            className={`py-2 px-3 rounded-xl text-[12px] font-semibold transition-all ${
+                              selectedAmbiguityOption
+                                ? 'bg-blue-500 hover:bg-blue-400 text-white'
+                                : 'bg-slate-700 text-slate-400 cursor-not-allowed'
+                            }`}
+                          >
+                            Choose this
+                          </button>
+                        </div>
+                      )}
+                      {disambiguationResolved && (
+                        <div className="text-[11px] text-emerald-300 font-medium">
+                          Selected. Re-running your prompt on the chosen area only.
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {isUser && (
-                    <span className="text-[9px] text-slate-500 px-1 select-none">{msg.time}</span>
+                    <div className="flex items-center gap-1.5 px-1 select-none">
+                      <span className="text-[9px] text-slate-500">{msg.time}</span>
+                      {promptUsage && (
+                        <span className="text-[9px] text-slate-400">
+                          {formatTokenCount(promptUsage.totalTokens)} tokens
+                          {typeof promptUsage.promptTokens === 'number' && typeof promptUsage.completionTokens === 'number'
+                            ? ` (${formatTokenCount(promptUsage.promptTokens)} in / ${formatTokenCount(promptUsage.completionTokens)} out)`
+                            : ''}
+                        </span>
+                      )}
+                    </div>
                   )}
 
                   {/* Comparative Diff Card (Premium Dynamic UI) */}

@@ -51,11 +51,15 @@ class OpenAIProvider implements AIProvider {
     const choice = response.choices[0];
     const content = choice?.message?.content || '';
     const tokensUsed = response.usage?.total_tokens || 0;
+    const promptTokens = response.usage?.prompt_tokens || 0;
+    const completionTokens = response.usage?.completion_tokens || 0;
 
     return {
       content,
       model: response.model,
       tokensUsed,
+      promptTokens,
+      completionTokens,
       finishReason: choice?.finish_reason || 'unknown',
     };
   }
@@ -98,11 +102,15 @@ class AzureOpenAIProvider implements AIProvider {
     const choice = data.output?.find((o: any) => o.type === 'message' && o.role === 'assistant');
     const content = choice?.content?.find((c: any) => c.type === 'output_text')?.text || '';
     const tokensUsed = data.usage?.total_tokens || 0;
+    const promptTokens = data.usage?.input_tokens || data.usage?.prompt_tokens || 0;
+    const completionTokens = data.usage?.output_tokens || data.usage?.completion_tokens || 0;
 
     return {
       content,
       model: data.model || fallbackModel,
       tokensUsed,
+      promptTokens,
+      completionTokens,
       finishReason: 'stop',
     };
   }

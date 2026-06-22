@@ -10,10 +10,16 @@ Production-focused AI blog generation and editing studio with:
 - `.md` / `.html` / `.pdf` export.
 
 ## Current Documentation Baseline
+- Agent bootstrap pack:
+  - [.ai/project-context.md](/C:/Users/vrund/OneDrive/Desktop/blog generation/project/.ai/project-context.md)
+  - [.ai/architecture.md](/C:/Users/vrund/OneDrive/Desktop/blog generation/project/.ai/architecture.md)
+  - [.ai/decisions.md](/C:/Users/vrund/OneDrive/Desktop/blog generation/project/.ai/decisions.md)
+  - [.ai/current-sprint.md](/C:/Users/vrund/OneDrive/Desktop/blog generation/project/.ai/current-sprint.md)
+  - [.ai/handoff.md](/C:/Users/vrund/OneDrive/Desktop/blog generation/project/.ai/handoff.md)
 - Skills + context source of truth:
-  - [AGENT_SKILLS_CONTEXT.md](/C:/Users/vrund/OneDrive/Desktop/blog generation/project/AGENT_SKILLS_CONTEXT.md)
+  - [.ai/AGENT_SKILLS_CONTEXT.md](/C:/Users/vrund/OneDrive/Desktop/blog generation/project/.ai/AGENT_SKILLS_CONTEXT.md)
 - Feature baseline (do-not-break behavior):
-  - [FEATURE_BASELINE.md](/C:/Users/vrund/OneDrive/Desktop/blog generation/project/FEATURE_BASELINE.md)
+  - [.ai/FEATURE_BASELINE.md](/C:/Users/vrund/OneDrive/Desktop/blog generation/project/.ai/FEATURE_BASELINE.md)
 - Full testing summary:
   - [FULL_TEST_REPORT.md](/C:/Users/vrund/OneDrive/Desktop/blog generation/project/FULL_TEST_REPORT.md)
 - QA matrix artifacts:

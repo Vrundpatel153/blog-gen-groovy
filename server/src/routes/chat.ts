@@ -106,13 +106,30 @@ router.post(
       );
 
       // 6. Save AI response message
+      const persistedActionData =
+        aiResponse.actionData && typeof aiResponse.actionData === 'object'
+          ? { ...aiResponse.actionData }
+          : {};
+      if (aiResponse.meta) {
+        const existingMeta =
+          persistedActionData &&
+          typeof (persistedActionData as Record<string, unknown>).__meta === 'object' &&
+          (persistedActionData as Record<string, unknown>).__meta !== null
+            ? ((persistedActionData as Record<string, unknown>).__meta as Record<string, unknown>)
+            : {};
+        (persistedActionData as Record<string, unknown>).__meta = {
+          ...existingMeta,
+          ...aiResponse.meta,
+        };
+      }
+      const hasPersistedActionData = Object.keys(persistedActionData).length > 0;
       const assistantMsg = await chatPersistence.saveMessage(
         threadId,
         'assistant',
         aiResponse.message.text,
         aiResponse.message.showDiffCard,
         aiResponse.actionType !== 'none' ? aiResponse.actionType : undefined,
-        aiResponse.actionData
+        hasPersistedActionData ? persistedActionData : undefined
       );
 
       res.json({
@@ -121,7 +138,8 @@ router.post(
           userMessage: userMsg,
           assistantMessage: assistantMsg,
           actionType: aiResponse.actionType,
-          actionData: aiResponse.actionData,
+          actionData: hasPersistedActionData ? persistedActionData : aiResponse.actionData,
+          meta: aiResponse.meta,
         },
       });
     } catch (err) {

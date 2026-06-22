@@ -68,6 +68,21 @@ export const chatService = {
     assistantMessage: ChatMessage;
     actionType?: string;
     actionData?: Record<string, unknown>;
+    meta?: {
+      tokenUsage?: {
+        promptTokens?: number;
+        completionTokens?: number;
+        totalTokens: number;
+      };
+      contextPlan?: {
+        mode: 'full' | 'focused' | 'targeted';
+        reason: string;
+        totalSections: number;
+        promptSections: number;
+      };
+      model?: string;
+      latencyMs?: number;
+    };
   }> {
     return apiFetch(`/chat/threads/${threadId}/messages`, {
       method: 'POST',

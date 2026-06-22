@@ -47,6 +47,28 @@ interface SanitizedContext {
   selectedField?: 'title' | 'section';
 }
 
+interface PromptContextPlan {
+  mode: 'full' | 'focused' | 'targeted';
+  reason: string;
+  totalSections: number;
+  promptSections: number;
+  promptContext?: SanitizedContext;
+}
+
+interface AmbiguityOption {
+  sectionId: string;
+  sectionType: BlogSection['type'];
+  occurrence: number;
+  previewText: string;
+  matchedSnippet: string;
+}
+
+interface AmbiguityPromptGuard {
+  snippet: string;
+  options: AmbiguityOption[];
+  prompt: string;
+}
+
 function sanitizeContext(blogContext?: {
   title: string;
   subtitle?: string;
@@ -469,6 +491,123 @@ function chooseTargetSectionId(
   return undefined;
 }
 
+function extractAmbiguityCandidateSnippets(message: string): string[] {
+  const clean = stripHtmlAndCode(message);
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const pushCandidate = (value: unknown) => {
+    const normalized = normalizeLayoutText(value);
+    if (!normalized || normalized.length < 3) return;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push(normalized);
+  };
+
+  extractQuotedSnippets(clean).forEach(pushCandidate);
+
+  const containsMatch = clean.match(
+    /(?:contains|containing|that says|starting with|starts with|text|phrase|word)\s+["']?([^"'\n]{3,180})["']?/i
+  );
+  if (containsMatch?.[1]) {
+    pushCandidate(containsMatch[1]);
+  }
+
+  const replaceMatch = clean.match(
+    /(?:replace|rewrite|change|edit|update|remove|delete|make)\s+(?:the\s+)?(?:text|word|phrase|paragraph|line|sentence)?\s*["']([^"'\n]{3,180})["']/i
+  );
+  if (replaceMatch?.[1]) {
+    pushCandidate(replaceMatch[1]);
+  }
+
+  return candidates.slice(0, 5);
+}
+
+function findMatchingSectionsBySnippet(
+  snippet: string,
+  context?: SanitizedContext
+): BlogSection[] {
+  if (!context || !snippet) return [];
+  const normalized = matchText(snippet);
+  const normalizedMultiline = comparableMultiline(snippet);
+  const matches = (context.sections || []).filter((section) => {
+    const display = sectionDisplayText(section);
+    const exact = matchText(display);
+    if (!exact) return false;
+    if (normalized && (exact === normalized || exact.includes(normalized) || normalized.includes(exact))) {
+      return true;
+    }
+    if (normalizedMultiline) {
+      const comparable = comparableMultiline(display);
+      if (
+        comparable &&
+        (comparable === normalizedMultiline ||
+          comparable.includes(normalizedMultiline) ||
+          normalizedMultiline.includes(comparable))
+      ) {
+        return true;
+      }
+    }
+    return false;
+  });
+
+  const dedupedIds = new Set<string>();
+  const ordered: BlogSection[] = [];
+  for (const section of matches) {
+    const id = stripHtmlAndCode(section.id || '');
+    if (!id || dedupedIds.has(id)) continue;
+    dedupedIds.add(id);
+    ordered.push(section);
+  }
+  return ordered;
+}
+
+function shouldRunAmbiguityGuard(message: string, context?: SanitizedContext): boolean {
+  if (!context || hasStrictSelectionScope(context)) return false;
+  const clean = stripHtmlAndCode(message).toLowerCase();
+  if (!clean) return false;
+  if (looksLikeGlobalRewriteIntent(clean)) return false;
+  if (parseOrdinalIndex(clean)) return false;
+  if (context.sections.some((section) => clean.includes(stripHtmlAndCode(section.id || '').toLowerCase()))) {
+    return false;
+  }
+  return /\b(rewrite|replace|change|edit|update|remove|delete|make|bold|italic|color|highlight|format)\b/.test(clean);
+}
+
+function detectAmbiguousPromptTarget(
+  message: string,
+  context?: SanitizedContext
+): AmbiguityPromptGuard | null {
+  if (!shouldRunAmbiguityGuard(message, context) || !context) return null;
+
+  const snippets = extractAmbiguityCandidateSnippets(message);
+  if (snippets.length === 0) return null;
+
+  for (const snippet of snippets) {
+    const matchingSections = findMatchingSectionsBySnippet(snippet, context);
+    if (matchingSections.length <= 1) continue;
+
+    const options: AmbiguityOption[] = matchingSections.slice(0, 8).map((section, idx) => {
+      const previewText = sectionDisplayText(section).slice(0, 220);
+      return {
+        sectionId: stripHtmlAndCode(section.id || ''),
+        sectionType: section.type,
+        occurrence: idx + 1,
+        previewText,
+        matchedSnippet: snippet,
+      };
+    });
+    if (options.length >= 2) {
+      return {
+        snippet,
+        options,
+        prompt: stripHtmlAndCode(message),
+      };
+    }
+  }
+  return null;
+}
+
 function dedupeEditorOps(ops: EditorOp[]): EditorOp[] {
   const merged = new Map<string, EditorOp>();
   for (const op of ops) {
@@ -604,18 +743,243 @@ function isLikelyComplexInstruction(message: string): boolean {
   return signalHits >= 2;
 }
 
+function looksLikeGlobalRewriteIntent(message: string): boolean {
+  const clean = stripHtmlAndCode(message).toLowerCase();
+  if (!clean) return false;
+  return /\b(whole blog|entire blog|complete blog|full blog|across the blog|rewrite the blog|rewrite entire|rewrite all|global rewrite|replace all|full rewrite)\b/.test(
+    clean
+  );
+}
+
+function tokenizeForContextRanking(message: string): string[] {
+  const stopWords = new Set([
+    'about',
+    'after',
+    'also',
+    'and',
+    'area',
+    'blog',
+    'change',
+    'changes',
+    'content',
+    'edit',
+    'from',
+    'have',
+    'into',
+    'just',
+    'make',
+    'more',
+    'only',
+    'please',
+    'prompt',
+    'section',
+    'this',
+    'that',
+    'text',
+    'the',
+    'their',
+    'there',
+    'these',
+    'those',
+    'title',
+    'with',
+    'without',
+    'your',
+  ]);
+  return stripHtmlAndCode(message)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 4 && !stopWords.has(token));
+}
+
+function buildPromptContextPlan(
+  context: SanitizedContext | undefined,
+  userMessage: string,
+  isComplexInstruction: boolean
+): PromptContextPlan {
+  if (!context) {
+    return {
+      mode: 'full',
+      reason: 'no_blog_context',
+      totalSections: 0,
+      promptSections: 0,
+      promptContext: undefined,
+    };
+  }
+
+  const sections = context.sections || [];
+  const totalSections = sections.length;
+  if (totalSections <= 12) {
+    return {
+      mode: 'full',
+      reason: 'small_document',
+      totalSections,
+      promptSections: totalSections,
+      promptContext: context,
+    };
+  }
+
+  if (looksLikeGlobalRewriteIntent(userMessage) || (isComplexInstruction && totalSections <= 16)) {
+    return {
+      mode: 'full',
+      reason: 'global_or_complex_intent',
+      totalSections,
+      promptSections: totalSections,
+      promptContext: context,
+    };
+  }
+
+  const selectedIndices = new Set<number>();
+  const addIndex = (idx: number) => {
+    if (idx >= 0 && idx < totalSections) selectedIndices.add(idx);
+  };
+  const addIndexWithNeighbors = (idx: number, radius = 1) => {
+    for (let offset = -radius; offset <= radius; offset += 1) {
+      addIndex(idx + offset);
+    }
+  };
+
+  const selectedScopeId =
+    stripHtmlAndCode(context.activeSectionId || '') ||
+    findSectionIdBySnippet(context.selectedText, context, { preferImage: false }) ||
+    findSectionIdBySnippet(context.selectedText, context, { preferImage: true }) ||
+    '';
+  if (selectedScopeId) {
+    const scopedIdx = sections.findIndex((section) => section.id === selectedScopeId);
+    if (scopedIdx >= 0) {
+      addIndexWithNeighbors(scopedIdx, 2);
+      addIndex(0);
+      addIndex(1);
+      addIndex(totalSections - 1);
+
+      const ordered = Array.from(selectedIndices).sort((a, b) => a - b);
+      const promptSections = ordered.map((idx) => sections[idx]).filter(Boolean);
+      return {
+        mode: 'focused',
+        reason: 'strict_selected_scope',
+        totalSections,
+        promptSections: promptSections.length,
+        promptContext: {
+          ...context,
+          sections: promptSections,
+          activeSectionId: selectedScopeId,
+        },
+      };
+    }
+  }
+
+  const lower = stripHtmlAndCode(userMessage).toLowerCase();
+  const targetSectionId = chooseTargetSectionId(userMessage, context, {
+    preferImage: /\b(image|photo|visual|figure|caption)\b/.test(lower),
+  });
+  const targetIdx = targetSectionId ? sections.findIndex((section) => section.id === targetSectionId) : -1;
+  if (targetIdx >= 0) {
+    addIndexWithNeighbors(targetIdx, 2);
+  }
+
+  // Keep minimal global narrative anchors (opening + ending) for quality safety.
+  addIndex(0);
+  addIndex(1);
+  addIndex(totalSections - 1);
+  addIndex(totalSections - 2);
+
+  const tokens = tokenizeForContextRanking(userMessage);
+  if (tokens.length > 0) {
+    const scored = sections
+      .map((section, idx) => {
+        const text = matchText(sectionDisplayText(section));
+        if (!text) return { idx, score: 0 };
+        let score = 0;
+        for (const token of tokens) {
+          if (text.includes(token)) score += token.length >= 7 ? 2 : 1;
+        }
+        if (section.id === targetSectionId) score += 6;
+        if (section.type === 'heading' && score > 0) score += 1;
+        return { idx, score };
+      })
+      .filter((entry) => entry.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 6);
+
+    for (const hit of scored) {
+      addIndexWithNeighbors(hit.idx, 1);
+    }
+  }
+
+  if (selectedIndices.size < 7) {
+    for (let idx = 0; idx < totalSections && selectedIndices.size < 7; idx += 1) {
+      addIndex(idx);
+    }
+  }
+
+  const ordered = Array.from(selectedIndices).sort((a, b) => a - b);
+  const maxPromptSections = 10;
+  const limited = ordered.slice(0, maxPromptSections);
+  if (limited.length === 0 || limited.length >= totalSections) {
+    return {
+      mode: 'full',
+      reason: 'pack_fallback_to_full',
+      totalSections,
+      promptSections: totalSections,
+      promptContext: context,
+    };
+  }
+
+  const promptSections = limited.map((idx) => sections[idx]).filter(Boolean);
+  const promptActiveId = promptSections.some((section) => section.id === context.activeSectionId)
+    ? context.activeSectionId
+    : undefined;
+
+  return {
+    mode: targetIdx >= 0 ? 'focused' : 'targeted',
+    reason: targetIdx >= 0 ? 'target_and_neighbors' : 'keyword_ranked_pack',
+    totalSections,
+    promptSections: promptSections.length,
+    promptContext: {
+      ...context,
+      sections: promptSections,
+      activeSectionId: promptActiveId,
+    },
+  };
+}
+
 function buildThreadMemory(
   threadMessages: ChatMessage[],
-  context?: SanitizedContext
+  context?: SanitizedContext,
+  options?: {
+    maxChars?: number;
+    recentPrompts?: number;
+    recentActions?: number;
+    recentAppliedChanges?: number;
+  }
 ): string {
+  const maxChars =
+    Number.isFinite(options?.maxChars as number) && (options?.maxChars as number) > 0
+      ? Math.floor(options?.maxChars as number)
+      : 2400;
+  const recentPromptsLimit =
+    Number.isFinite(options?.recentPrompts as number) && (options?.recentPrompts as number) > 0
+      ? Math.floor(options?.recentPrompts as number)
+      : 6;
+  const recentActionsLimit =
+    Number.isFinite(options?.recentActions as number) && (options?.recentActions as number) > 0
+      ? Math.floor(options?.recentActions as number)
+      : 6;
+  const recentAppliedLimit =
+    Number.isFinite(options?.recentAppliedChanges as number) && (options?.recentAppliedChanges as number) > 0
+      ? Math.floor(options?.recentAppliedChanges as number)
+      : 4;
+
   const recentUserPrompts = threadMessages
     .filter((m) => m.sender === 'user')
-    .slice(-6)
+    .slice(-recentPromptsLimit)
     .map((m, idx) => `${idx + 1}. ${stripHtmlAndCode(m.text).slice(0, 180)}`);
 
   const recentActions = threadMessages
     .filter((m) => m.sender === 'assistant' && !!m.actionType)
-    .slice(-6)
+    .slice(-recentActionsLimit)
     .map((m, idx) => {
       const kind = stripHtmlAndCode(m.actionType || '');
       if (kind === 'editor_ops') {
@@ -638,7 +1002,7 @@ function buildThreadMemory(
 
   const recentAppliedChanges = threadMessages
     .filter((m) => m.sender === 'assistant' && !!(m.actionData as any)?.appliedAt)
-    .slice(-4)
+    .slice(-recentAppliedLimit)
     .map((m, idx) => {
       const versions = Array.isArray((m.actionData as any)?.chatVersions)
         ? ((m.actionData as any).chatVersions as any[])
@@ -700,11 +1064,12 @@ function buildThreadMemory(
     memoryBlocks.push(`Recent persisted content changes:\n${recentAppliedChanges.join('\n')}`);
   }
 
-  return memoryBlocks.join('\n\n').slice(0, 2400);
+  return memoryBlocks.join('\n\n').slice(0, maxChars);
 }
 
 function buildFallbackResponse(
-  fallback: { actionType: ActionKind; actionData?: Record<string, unknown>; message?: string }
+  fallback: { actionType: ActionKind; actionData?: Record<string, unknown>; message?: string },
+  meta?: ChatAssistantResponse['meta']
 ): ChatAssistantResponse {
   const normalizedActionData =
     fallback.actionType === 'editor_ops' && fallback.actionData
@@ -753,6 +1118,7 @@ function buildFallbackResponse(
     },
     actionType: fallback.actionType,
     actionData: normalizedActionData,
+    meta,
   };
 }
 
@@ -1767,19 +2133,66 @@ export async function processChat(
   const cleanContext = sanitizeContext(blogContext);
   const cleanUserMessage = stripHtmlAndCode(newMessage);
   const isComplexInstruction = isLikelyComplexInstruction(cleanUserMessage);
+  const contextPlan = buildPromptContextPlan(cleanContext, cleanUserMessage, isComplexInstruction);
+  const promptContext = contextPlan.promptContext || cleanContext;
   const scopedFallbackCandidate = hasStrictSelectionScope(cleanContext)
     ? inferScopedSelectionAction(cleanUserMessage, cleanContext)
     : null;
   const fallbackCandidate = scopedFallbackCandidate || inferFallbackAction(cleanUserMessage, cleanContext);
 
+  const ambiguityGuard = detectAmbiguousPromptTarget(cleanUserMessage, cleanContext);
+  if (ambiguityGuard) {
+    const ambiguityMeta: ChatAssistantResponse['meta'] = {
+      tokenUsage: {
+        totalTokens: 0,
+      },
+      contextPlan: {
+        mode: contextPlan.mode,
+        reason: 'needs_disambiguation',
+        totalSections: contextPlan.totalSections,
+        promptSections: contextPlan.promptSections,
+      },
+      model: 'clarification_guard',
+      latencyMs: 0,
+    };
+    const optionsPreview = ambiguityGuard.options
+      .slice(0, 3)
+      .map((option) => `${option.occurrence}. ${option.previewText.slice(0, 90)}`)
+      .join(' | ');
+    const clarificationMessage = `I found ${ambiguityGuard.options.length} matching areas for "${ambiguityGuard.snippet}". Choose the exact occurrence to edit, then I will apply your prompt only there.${optionsPreview ? ` Matches: ${optionsPreview}` : ''}`;
+    return buildFallbackResponse(
+      {
+        actionType: 'none',
+        actionData: {
+          __meta: {
+            needsDisambiguation: true,
+            ambiguityType: 'multiple_matches',
+            snippet: ambiguityGuard.snippet,
+            prompt: ambiguityGuard.prompt,
+            options: ambiguityGuard.options,
+          },
+        },
+        message: clarificationMessage,
+      },
+      ambiguityMeta
+    );
+  }
+
   const ai = getAIProvider();
-  const threadMemory = buildThreadMemory(threadMessages, cleanContext);
-  const systemPrompt = buildChatAssistantPrompt(cleanContext, threadMemory);
+  const isPackedMode = contextPlan.mode !== 'full';
+  const threadMemory = buildThreadMemory(threadMessages, promptContext, {
+    maxChars: isPackedMode ? 1200 : 2200,
+    recentPrompts: isPackedMode ? 4 : 6,
+    recentActions: isPackedMode ? 4 : 6,
+    recentAppliedChanges: isPackedMode ? 2 : 4,
+  });
+  const systemPrompt = buildChatAssistantPrompt(promptContext, threadMemory);
   const model = config.ai.modelChat;
 
   const messages: AIMessage[] = [{ role: 'system', content: systemPrompt }];
 
-  const recent = threadMessages.slice(-40);
+  const historyLimit = contextPlan.mode === 'full' ? 26 : 10;
+  const recent = threadMessages.slice(-historyLimit);
   for (const msg of recent) {
     messages.push({
       role: msg.sender === 'user' ? 'user' : 'assistant',
@@ -1812,6 +2225,19 @@ export async function processChat(
   }
 
   if (!result) {
+    const fallbackMeta: ChatAssistantResponse['meta'] = {
+      tokenUsage: {
+        totalTokens: 0,
+      },
+      contextPlan: {
+        mode: contextPlan.mode,
+        reason: contextPlan.reason,
+        totalSections: contextPlan.totalSections,
+        promptSections: contextPlan.promptSections,
+      },
+      model,
+      latencyMs: Date.now() - startTime,
+    };
     await logPrompt({
       userId,
       blogId,
@@ -1839,14 +2265,14 @@ export async function processChat(
           (hasStrictSelectionScope(cleanContext)
             ? 'Prepared a scoped update for your selected editor area.'
             : undefined),
-      });
+      }, fallbackMeta);
     }
     return buildFallbackResponse({
       actionType: 'none',
       actionData: undefined,
       message:
         'I could not complete this edit request right now. Please retry once, and I will apply your exact requested changes.',
-    });
+    }, fallbackMeta);
   }
 
   const latencyMs = Date.now() - startTime;
@@ -1991,6 +2417,15 @@ export async function processChat(
       : '';
   const responseText = stripHtmlAndCode(parsed?.message || result.content || scopedFallbackMessage).trim();
   const hasAction = actionType === 'edit_section' || actionType === 'replace_all' || actionType === 'editor_ops';
+  const promptTokens =
+    Number.isFinite(result.promptTokens as number) && (result.promptTokens as number) > 0
+      ? Number(result.promptTokens)
+      : undefined;
+  const completionTokens =
+    Number.isFinite(result.completionTokens as number) && (result.completionTokens as number) > 0
+      ? Number(result.completionTokens)
+      : undefined;
+  const totalTokens = Number.isFinite(result.tokensUsed) ? Math.max(0, Number(result.tokensUsed)) : 0;
 
   return {
     message: {
@@ -2005,5 +2440,20 @@ export async function processChat(
     },
     actionType,
     actionData,
+    meta: {
+      tokenUsage: {
+        totalTokens,
+        ...(promptTokens ? { promptTokens } : {}),
+        ...(completionTokens ? { completionTokens } : {}),
+      },
+      contextPlan: {
+        mode: contextPlan.mode,
+        reason: contextPlan.reason,
+        totalSections: contextPlan.totalSections,
+        promptSections: contextPlan.promptSections,
+      },
+      model: result.model,
+      latencyMs,
+    },
   };
 }
