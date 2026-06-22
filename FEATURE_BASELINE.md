@@ -1,6 +1,6 @@
 # AI Blog Studio Feature Baseline
 
-Last updated: 2026-06-22
+Last updated: 2026-06-22 (final sync pass)
 
 ## Purpose
 This document is the current "do-not-break" baseline for blog generation, chat editing, preview, apply/replace, persistence, and revert flows.
@@ -343,7 +343,7 @@ Before merging any feature touching chat/editor/generation:
    - history preview modal.
 11. Confirm Dev.to publish for selected blog:
    - success response and saved publish metadata,
-   - published link appears in sidebar published list.
+   - published card appears in the dedicated `Published Blogs` page.
 12. Confirm export outputs for selected blog:
    - `.md` readable and structured,
    - `.html` visual layout + images + spacing preserved,
@@ -351,6 +351,7 @@ Before merging any feature touching chat/editor/generation:
 
 ## Latest Validation Snapshot (2026-06-22)
 - Full QA matrix: **30/30 pass**.
+- Latest CLI matrix re-run: **30/30 pass** (fresh run, generated blog `07d61a6e-4de3-4030-8146-9262ca0da0ed`).
 - Workflow lifecycle (version create/get/apply/rollback): **pass**.
 - Live UI scoped workflow (generate -> preview -> replace -> revert -> history): **pass**.
 - Frontend build: **pass**.
@@ -360,6 +361,7 @@ Before merging any feature touching chat/editor/generation:
   - Markdown/HTML/PDF export route: **pass**
 - Generation quality smoke re-run: **pass** (thought-leadership, how-to, case-study)
 - Published blogs navigation update: **pass** (sidebar option -> dedicated grid page)
+- List rewrite fidelity hardening: **pass** (semantic list rendering + dominant-section rewrite guard)
 - Latest validated evidence and regression notes are tracked in:
   - `30 testcases.md`
   - `20 testcases.md`

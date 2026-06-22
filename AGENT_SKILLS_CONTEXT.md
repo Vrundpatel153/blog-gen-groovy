@@ -1,6 +1,6 @@
 # AI Agent Skills + Context
 
-Last updated: 2026-06-22
+Last updated: 2026-06-22 (final sync pass)
 
 ## Project Intent
 - Build a production-grade AI blog editor where generation and chat edits are precise, traceable, and safe.
@@ -104,7 +104,8 @@ Last updated: 2026-06-22
   - `.md` keeps heading/list/callout/image structure readable for re-editing and publishing,
   - `.html` keeps professional blog layout and image placement,
   - `.pdf` preserves core visual hierarchy with title/subtitle/sections/callouts/images.
-- Sidebar must surface published blogs separately with:
+- Sidebar must include a dedicated `Published Blogs` navigation option that opens a full page with:
+  - grid cards for published items,
   - quick preview entry point,
   - direct open-link to published URL.
 
@@ -181,7 +182,7 @@ Run all before merging:
 13. Publish the selected blog to Dev.to and confirm:
   - publish success response,
   - persisted published link on reload,
-  - entry appears in sidebar Published Blogs list.
+  - blog appears on the dedicated `Published Blogs` page.
 14. Export selected blog as `.md`, `.html`, `.pdf` and verify:
   - headings/lists/callouts maintain structure,
   - image links render in HTML/PDF outputs,
@@ -204,7 +205,7 @@ Run all before merging:
 - Images render consistently in both editor and preview.
 - Theme boundaries remain intact (cream blog document vs neutral shell/chat/sidebar).
 - Publish/export flows are reliable and scoped to the selected blog.
-- Published blog list remains visible in sidebar with preview + external link.
+- Published blogs remain accessible through the dedicated `Published Blogs` page (opened from sidebar nav).
 
 ## Latest Verified State (2026-06-22)
 - Full runtime health rechecked:
@@ -214,6 +215,11 @@ Run all before merging:
   - total: 30,
   - pass: 30,
   - fail: 0.
+- Latest CLI regression matrix run (same day) also passed:
+  - total: 30,
+  - pass: 30,
+  - fail: 0,
+  - generated blog id: `07d61a6e-4de3-4030-8146-9262ca0da0ed`.
 - Live browser QA re-run for the critical user path:
   - generate blog,
   - scoped chat edit,
@@ -226,10 +232,14 @@ Run all before merging:
   - history cards and history preview retain structure for list-like edits.
 - List formatting reliability is now part of baseline:
   - multiline list-like content in chat/history/preview is rendered as proper list UI,
-  - numbered-list prompts are reinforced in backend to preserve numbered output shape.
+  - numbered-list prompts are reinforced in backend to preserve numbered output shape,
+  - rewrite-only list prompts are constrained to the dominant intended section to avoid cross-section spillover.
 - Generation quality hardening validated:
   - three live generation smoke tests (thought leadership, how-to, case-study) passed,
   - outputs included numbered framework, bullet checklist, and explicit closing next-step CTA.
+- Current implementation anchors for the latest list/diff fidelity fixes:
+  - `server/src/services/chatAssistant.ts` -> `enforceNumberedListIntent` (count parsing + dominant-section rewrite constraint),
+  - `src/components/BlogEditorView.tsx` -> `buildEditorOpsCardText` + `coerceImplicitOrderedListText` (semantic list rendering in diff/history/preview).
 
 ## Current Quality Guarantees
 - Replace/preview/revert path parity:

@@ -136,6 +136,26 @@ function matchText(input: string): string {
     .trim();
 }
 
+function stripListPrefix(line: string): string {
+  return normalizeLayoutText(line)
+    .replace(/^(\d+)[.)]\s+/, '')
+    .replace(/^[-*\u2022\u00B7\u25AA]+\s+/, '')
+    .trim();
+}
+
+function comparableMultiline(input: string): string {
+  return normalizeLayoutText(input)
+    .split('\n')
+    .map((line) => stripListPrefix(line))
+    .filter(Boolean)
+    .join('\n')
+    .toLowerCase()
+    .replace(/[^a-z0-9\n\s]/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n+/g, '\n')
+    .trim();
+}
+
 function sectionDisplayText(section?: { type?: string; text?: string; caption?: string; url?: string }): string {
   if (!section) return '';
   if (section.type === 'image') {
@@ -324,9 +344,49 @@ function findSectionIdBySnippet(
   const contains = sections.find((s) => matchText(sectionDisplayText(s)).includes(snippet));
   if (contains) return contains.id;
 
+  const strippedSnippet = comparableMultiline(rawSnippet);
+  if (strippedSnippet) {
+    const strippedContains = sections.find((s) =>
+      comparableMultiline(sectionDisplayText(s)).includes(strippedSnippet)
+    );
+    if (strippedContains) return strippedContains.id;
+  }
+
   const shortened = snippet.slice(0, 80);
-  if (!shortened) return undefined;
+  if (!shortened) {
+    return undefined;
+  }
   const partial = sections.find((s) => matchText(sectionDisplayText(s)).includes(shortened));
+  if (partial?.id) return partial.id;
+
+  const snippetLines = strippedSnippet
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (snippetLines.length > 0) {
+    let bestMatch: { id: string; score: number } | null = null;
+    for (const section of sections) {
+      const sectionLines = comparableMultiline(sectionDisplayText(section))
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+      if (sectionLines.length === 0) continue;
+
+      let matched = 0;
+      for (const line of snippetLines) {
+        if (sectionLines.some((candidate) => candidate === line || candidate.includes(line) || line.includes(candidate))) {
+          matched += 1;
+        }
+      }
+      const score = matched / snippetLines.length;
+      if (score < 0.5) continue;
+      if (!bestMatch || score > bestMatch.score) {
+        bestMatch = { id: section.id, score };
+      }
+    }
+    if (bestMatch?.id) return bestMatch.id;
+  }
+
   return partial?.id;
 }
 
@@ -1485,11 +1545,50 @@ function enforceNumberedListIntent(
     return { ...op, text: numbered };
   });
 
+  let constrainedOps = dedupeEditorOps(normalizedOps);
+
+  const replaceOps = constrainedOps.filter(
+    (op) => op.op === 'replace_section_text' && stripHtmlAndCode(op.sectionId || '') && normalizeLayoutText(op.text || '')
+  );
+  const rewriteOnlyIntent =
+    /\b(rewrite|rephrase|improve|refine|better|concise|concise|shorten)\b/.test(lower) &&
+    !/\b(title|subtitle|image|caption|heading|h1|h2|h3|cover)\b/.test(lower);
+
+  if (rewriteOnlyIntent && replaceOps.length >= 2) {
+    const sectionCounts = new Map<string, number>();
+    replaceOps.forEach((op) => {
+      const key = stripHtmlAndCode(op.sectionId || '');
+      if (!key) return;
+      sectionCounts.set(key, (sectionCounts.get(key) || 0) + 1);
+    });
+    const dominantEntry = Array.from(sectionCounts.entries()).sort((a, b) => b[1] - a[1])[0];
+    const dominantSectionId = dominantEntry?.[0] || '';
+    const dominantCount = dominantEntry?.[1] || 0;
+    const targetCount = Math.max(explicitCount || 0, 2);
+
+    if (dominantSectionId && dominantCount >= Math.min(targetCount, 2)) {
+      let seenDominantReplace = 0;
+      constrainedOps = constrainedOps.filter((op) => {
+        if (op.op === 'replace_section_text') {
+          const key = stripHtmlAndCode(op.sectionId || '');
+          if (key !== dominantSectionId) return false;
+          seenDominantReplace += 1;
+          return seenDominantReplace <= targetCount;
+        }
+        if (op.op === 'style_section') {
+          const key = stripHtmlAndCode(op.sectionId || '');
+          return !key || key === dominantSectionId;
+        }
+        return true;
+      });
+    }
+  }
+
   return {
     actionType,
     actionData: {
       ...actionData,
-      operations: dedupeEditorOps(normalizedOps),
+      operations: constrainedOps,
     },
   };
 }

@@ -10,6 +10,8 @@ import Paragraph from '@tiptap/extension-paragraph';
 import Heading from '@tiptap/extension-heading';
 import Blockquote from '@tiptap/extension-blockquote';
 import Image from '@tiptap/extension-image';
+import OrderedList from '@tiptap/extension-ordered-list';
+import BulletList from '@tiptap/extension-bullet-list';
 import type { Blog, BlogSection } from './MockData';
 import { blogService } from '../services/blogService';
 import { chatService } from '../services/chatService';
@@ -221,6 +223,32 @@ type ContentBlock =
   | { kind: 'ordered'; items: string[]; start: number }
   | { kind: 'bullet'; items: string[] };
 
+const parseInlineOrderedItems = (value: string): { start: number; items: string[] } | null => {
+  const compact = value.replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!compact) return null;
+
+  const regex = /(?:^|\s)(\d+)[.)]\s+([\s\S]*?)(?=(?:\s+\d+[.)]\s+)|$)/g;
+  const matches = Array.from(compact.matchAll(regex));
+  if (matches.length < 2) return null;
+
+  const numbers = matches
+    .map((m) => Number(m[1] || '0'))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  if (numbers.length < 2) return null;
+  const isAscending = numbers.every((n, idx) => idx === 0 || n >= numbers[idx - 1]);
+  if (!isAscending) return null;
+
+  const items = matches
+    .map((m) => sanitizeDisplayText(m[2] || ''))
+    .filter(Boolean);
+  if (items.length < 2) return null;
+
+  return {
+    start: numbers[0] || 1,
+    items,
+  };
+};
+
 const parseListLines = (value: unknown): ParsedList | null => {
   const text = normalizeLayoutText(value);
   if (!text) return null;
@@ -239,6 +267,15 @@ const parseListLines = (value: unknown): ParsedList | null => {
       kind: 'ordered',
       start: Number.isFinite(first) && first > 0 ? first : 1,
       items: orderedMatches.map((match) => sanitizeDisplayText(match?.[2] || '')).filter(Boolean),
+    };
+  }
+
+  const inlineOrdered = parseInlineOrderedItems(text);
+  if (inlineOrdered) {
+    return {
+      kind: 'ordered',
+      start: inlineOrdered.start,
+      items: inlineOrdered.items,
     };
   }
 
@@ -261,6 +298,13 @@ const parseContentBlocks = (value: unknown): ContentBlock[] => {
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean);
+
+  if (lines.length === 1) {
+    const inlineOrdered = parseInlineOrderedItems(normalized);
+    if (inlineOrdered) {
+      return [{ kind: 'ordered', start: inlineOrdered.start, items: inlineOrdered.items }];
+    }
+  }
 
   const blocks: ContentBlock[] = [];
   let i = 0;
@@ -346,6 +390,14 @@ const coerceImplicitOrderedListText = (value: string): string => {
   if (sentenceLikeCount > Math.floor(lines.length / 3)) return normalized;
 
   return lines.map((line, idx) => `${idx + 1}. ${line}`).join('\n');
+};
+
+const looksLikeFormattingDirectiveText = (value: string): boolean => {
+  const clean = normalizeLayoutText(value).toLowerCase();
+  if (!clean) return false;
+  const short = clean.split(/\s+/).length <= 20 && clean.split('\n').length <= 2;
+  if (!short) return false;
+  return /(numbered list|bullet list|separate lines|each line|line[- ]by[- ]line|1,\s*2,\s*3)/.test(clean);
 };
 
 const defaultImageUrl = (seedText: string): string => {
@@ -643,10 +695,28 @@ export const BlogEditorView: React.FC<BlogEditorViewProps> = ({
         : section.text || ''
     );
 
-  const stripListPrefix = (line: string): string =>
-    normalizeLayoutText(line).replace(/^(\d+)[.)]\s+/, '').replace(/^[-*â€¢Â·â–ª]\s+/, '').trim();
+  const normalizeComparableText = (value: unknown): string =>
+    normalizeLayoutText(value)
+      .toLowerCase()
+      .replace(/[^a-z0-9\n\s]/g, ' ')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n+/g, '\n')
+      .trim();
 
-  const resolveSectionIdFromSelectedText = (selectedText: string): string | null => {
+  const stripListPrefix = (line: string): string =>
+    normalizeLayoutText(line)
+      .replace(/^(\d+)[.)]\s+/, '')
+      .replace(/^[-*\u2022\u00B7\u25AA]+\s+/, '')
+      .trim();
+
+  const stripListPrefixesFromText = (value: unknown): string =>
+    normalizeLayoutText(value)
+      .split('\n')
+      .map((line) => stripListPrefix(line))
+      .filter(Boolean)
+      .join('\n');
+
+  const findSectionIdBySelectedText = (selectedText: string): string | null => {
     const needle = normalizeLayoutText(selectedText);
     if (!needle) return null;
 
@@ -656,24 +726,54 @@ export const BlogEditorView: React.FC<BlogEditorViewProps> = ({
     const direct = localBlog.sections.find((s) => getSectionComparableText(s).includes(needle));
     if (direct?.id) return direct.id;
 
-    const normalizedNeedle = needle
+    const strippedNeedle = stripListPrefixesFromText(needle);
+    if (strippedNeedle) {
+      const strippedDirect = localBlog.sections.find((s) =>
+        stripListPrefixesFromText(getSectionComparableText(s)).includes(strippedNeedle)
+      );
+      if (strippedDirect?.id) return strippedDirect.id;
+    }
+
+    const comparableNeedle = normalizeComparableText(needle);
+    if (comparableNeedle) {
+      const comparableDirect = localBlog.sections.find((s) =>
+        normalizeComparableText(getSectionComparableText(s)).includes(comparableNeedle)
+      );
+      if (comparableDirect?.id) return comparableDirect.id;
+    }
+
+    const needleLines = stripListPrefixesFromText(needle)
       .split('\n')
-      .map((line) => stripListPrefix(line))
-      .filter(Boolean)
-      .join('\n');
-    if (!normalizedNeedle) return null;
+      .map((line) => normalizeComparableText(line))
+      .filter(Boolean);
+    if (needleLines.length === 0) return null;
 
-    const fallback = localBlog.sections.find((s) => {
-      const comparable = getSectionComparableText(s);
-      const normalizedComparable = comparable
+    let bestMatch: { id: string; score: number } | null = null;
+    for (const section of localBlog.sections) {
+      const comparableLines = stripListPrefixesFromText(getSectionComparableText(section))
         .split('\n')
-        .map((line) => stripListPrefix(line))
-        .filter(Boolean)
-        .join('\n');
-      return normalizedComparable.includes(normalizedNeedle);
-    });
+        .map((line) => normalizeComparableText(line))
+        .filter(Boolean);
+      if (comparableLines.length === 0) continue;
 
-    return fallback?.id || null;
+      let matched = 0;
+      for (const line of needleLines) {
+        if (comparableLines.some((candidate) => candidate === line || candidate.includes(line) || line.includes(candidate))) {
+          matched += 1;
+        }
+      }
+      const score = matched / needleLines.length;
+      if (score <= 0.5) continue;
+      if (!bestMatch || score > bestMatch.score) {
+        bestMatch = { id: section.id, score };
+      }
+    }
+
+    return bestMatch?.id || null;
+  };
+
+  const resolveSectionIdFromSelectedText = (selectedText: string): string | null => {
+    return findSectionIdBySelectedText(selectedText);
   };
 
   const updateSelectedEditorScope = (next: SelectedEditorScope) => {
@@ -1028,6 +1128,8 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
         heading: false,
         blockquote: false,
         paragraph: false,
+        orderedList: false,
+        bulletList: false,
       }),
       Underline,
       TextStyle,
@@ -1035,6 +1137,30 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
       Link.configure({
         openOnClick: false,
         HTMLAttributes: { class: 'text-brand-primary underline cursor-pointer' },
+      }),
+      OrderedList.extend({
+        addAttributes() {
+          return {
+            ...(this.parent?.() || {}),
+            id: {
+              default: null,
+              parseHTML: (el) => el.getAttribute('id') || el.getAttribute('data-id'),
+              renderHTML: (attrs) => (attrs.id ? { id: attrs.id, 'data-id': attrs.id } : {}),
+            },
+          };
+        },
+      }),
+      BulletList.extend({
+        addAttributes() {
+          return {
+            ...(this.parent?.() || {}),
+            id: {
+              default: null,
+              parseHTML: (el) => el.getAttribute('id') || el.getAttribute('data-id'),
+              renderHTML: (attrs) => (attrs.id ? { id: attrs.id, 'data-id': attrs.id } : {}),
+            },
+          };
+        },
       }),
       Image.extend({
         addAttributes() {
@@ -1398,8 +1524,10 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
   ): { nextText: string; didReplace: boolean } => {
     const sourceRaw = typeof sourceText === 'string' ? sourceText : '';
     const needleRaw = typeof selectedText === 'string' ? selectedText : '';
-    const replacementRaw = sanitizeDisplayText(replacementText || '');
+    const replacementRaw = normalizeLayoutText(replacementText || '');
     const needle = normalizeLayoutText(needleRaw);
+    const normalizeForMatch = (value: string): string =>
+      normalizeComparableText(value).replace(/\n+/g, ' ');
 
     if (!needle) {
       return { nextText: replacementRaw, didReplace: sourceRaw !== replacementRaw };
@@ -1430,22 +1558,33 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
       return { nextText: replacementRaw, didReplace: sourceRaw !== replacementRaw };
     }
 
+    const normalizedSource = normalizeForMatch(sourceRaw);
+    const normalizedNeedle = normalizeForMatch(needleRaw || needle);
+    if (normalizedSource && normalizedNeedle && normalizedSource === normalizedNeedle) {
+      return { nextText: replacementRaw, didReplace: sourceRaw !== replacementRaw };
+    }
+
     // List-aware fallback: match selected lines without numbering/bullets and
     // preserve the existing list format when replacing list content.
     const sourceLines = sourceRaw.split(/\r?\n/);
     const needleLines = needle.split('\n').map((line) => normalizeLayoutText(line));
-    const sourceComparable = sourceLines.map((line) => stripListPrefix(line));
-    const needleComparable = needleLines.map((line) => stripListPrefix(line)).filter(Boolean);
+    const sourceComparable = sourceLines.map((line) => normalizeForMatch(stripListPrefix(line)));
+    const needleComparable = needleLines
+      .map((line) => normalizeForMatch(stripListPrefix(line)))
+      .filter(Boolean);
     const replacementLinesRaw = replacementRaw
       .split(/\r?\n/)
-      .map((line) => sanitizeDisplayText(line))
+      .map((line) => normalizeLayoutText(line))
       .filter(Boolean);
 
     if (sourceComparable.length > 0 && needleComparable.length > 0) {
       let matchedStart = -1;
       for (let i = 0; i <= sourceComparable.length - needleComparable.length; i += 1) {
         const windowSlice = sourceComparable.slice(i, i + needleComparable.length);
-        const isMatch = windowSlice.every((line, idx) => line === needleComparable[idx]);
+        const isMatch = windowSlice.every((line, idx) => {
+          const target = needleComparable[idx];
+          return line === target || line.includes(target) || target.includes(line);
+        });
         if (isMatch) {
           matchedStart = i;
           break;
@@ -1480,7 +1619,85 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
       }
     }
 
+    const compactSource = normalizeForMatch(sourceRaw);
+    const compactNeedle = normalizeForMatch(needle);
+    if (compactSource && compactNeedle && compactSource.includes(compactNeedle)) {
+      return { nextText: replacementRaw, didReplace: sourceRaw !== replacementRaw };
+    }
+
     return { nextText: sourceRaw, didReplace: false };
+  };
+
+  const replaceSelectedTextAcrossSections = (
+    sections: BlogSection[],
+    selectedText: string,
+    replacementText: string,
+    preferredSectionId?: string
+  ): { sections: BlogSection[]; didReplace: boolean; sectionId?: string } => {
+    const needle = normalizeLayoutText(selectedText);
+    if (!needle) {
+      return { sections, didReplace: false };
+    }
+
+    const getComparable = (section: BlogSection): string =>
+      normalizeLayoutText(
+        section.type === 'image'
+          ? section.caption || section.text || section.url || ''
+          : section.text || ''
+      );
+
+    const findInSectionsByNeedle = (): string | undefined => {
+      const exact = sections.find((section) => getComparable(section) === needle);
+      if (exact?.id) return exact.id;
+      const direct = sections.find((section) => getComparable(section).includes(needle));
+      if (direct?.id) return direct.id;
+
+      const strippedNeedle = stripListPrefixesFromText(needle);
+      if (strippedNeedle) {
+        const stripped = sections.find((section) =>
+          stripListPrefixesFromText(getComparable(section)).includes(strippedNeedle)
+        );
+        if (stripped?.id) return stripped.id;
+      }
+
+      const comparableNeedle = normalizeComparableText(needle);
+      if (!comparableNeedle) return undefined;
+      const fuzzy = sections.find((section) =>
+        normalizeComparableText(getComparable(section)).includes(comparableNeedle)
+      );
+      return fuzzy?.id;
+    };
+
+    const candidateIds = Array.from(
+      new Set(
+        [
+          sanitizePlainText(preferredSectionId || ''),
+          findInSectionsByNeedle() || '',
+          ...sections.map((s) => s.id),
+        ].filter(Boolean)
+      )
+    );
+
+    for (const id of candidateIds) {
+      let changed = false;
+      const updated = sections.map((section) => {
+        if (section.id !== id) return section;
+        const source = section.type === 'image' ? section.caption || section.text || '' : section.text || '';
+        const replaced = replaceSelectedTextInText(source, needle, replacementText);
+        if (!replaced.didReplace) return section;
+        changed = true;
+        if (section.type === 'image') {
+          return { ...section, text: replaced.nextText, caption: replaced.nextText };
+        }
+        return { ...section, text: replaced.nextText };
+      });
+
+      if (changed) {
+        return { sections: updated, didReplace: true, sectionId: id };
+      }
+    }
+
+    return { sections, didReplace: false };
   };
 
   const findSelectedTextRangeInSection = (
@@ -1537,7 +1754,9 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
         const snapshot = snapshotByIndex || operationOriginals?.[index];
         const resolvedFromOriginal = findSectionIdByOriginalText(snapshot?.originalText, sections);
         const resolvedFromAnchor = findSectionIdByOriginalText(snapshot?.anchorOriginalText, sections);
-        const resolvedFromSelected = findSectionIdByOriginalText(op.selectedText, sections);
+        const resolvedFromSelected =
+          findSectionIdByOriginalText(op.selectedText, sections) ||
+          findSectionIdBySelectedText(op.selectedText || '');
 
         const nextSectionId = op.sectionId || resolvedFromOriginal || resolvedFromSelected;
         if (op.op === 'insert_image_after') {
@@ -1649,21 +1868,22 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
         continue;
       }
 
-      if (op.op === 'delete_section' && op.sectionId) {
+      if (op.op === 'delete_section' && (op.sectionId || op.selectedText)) {
         if (op.selectedText) {
-          const selected = normalizeLayoutText(op.selectedText);
-          let changed = false;
-          updatedSections = updatedSections.map((s) => {
-            if (s.id !== op.sectionId || s.type === 'image') return s;
-            const replaced = replaceSelectedTextInText(s.text || '', selected, '');
-            if (!replaced.didReplace) return s;
-            changed = true;
-            return { ...s, text: replaced.nextText };
-          });
-          if (changed) didApply = true;
-          if (changed) shouldResetEditorContent = true;
+          const replaced = replaceSelectedTextAcrossSections(
+            updatedSections,
+            op.selectedText,
+            '',
+            op.sectionId
+          );
+          if (replaced.didReplace) {
+            updatedSections = replaced.sections;
+            didApply = true;
+            shouldResetEditorContent = true;
+          }
           continue;
         }
+        if (!op.sectionId) continue;
         const beforeLen = updatedSections.length;
         updatedSections = updatedSections.filter((s) => s.id !== op.sectionId);
         delete nextSectionStyles[op.sectionId];
@@ -1672,20 +1892,30 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
         continue;
       }
 
-      if (op.op === 'replace_section_text' && op.sectionId && op.text) {
+      if (op.op === 'replace_section_text' && (op.sectionId || op.selectedText) && op.text) {
         const nextText = normalizeLayoutText(op.text);
         let changed = false;
-        updatedSections = updatedSections.map((s) => {
-          if (s.id !== op.sectionId) return s;
-          if (op.selectedText && s.type !== 'image') {
-            const replaced = replaceSelectedTextInText(s.text || '', op.selectedText, nextText);
-            if (!replaced.didReplace) return s;
-            if (s.text !== replaced.nextText) changed = true;
-            return { ...s, text: replaced.nextText };
+        if (op.selectedText) {
+          const replaced = replaceSelectedTextAcrossSections(
+            updatedSections,
+            op.selectedText,
+            nextText,
+            op.sectionId
+          );
+          if (replaced.didReplace) {
+            updatedSections = replaced.sections;
+            changed = true;
           }
-          if (s.text !== nextText) changed = true;
-          return { ...s, text: nextText };
-        });
+        } else {
+          updatedSections = updatedSections.map((s) => {
+            if (s.id !== op.sectionId) return s;
+            if (s.type === 'heading' && looksLikeFormattingDirectiveText(nextText)) {
+              return s;
+            }
+            if (s.text !== nextText) changed = true;
+            return { ...s, text: nextText };
+          });
+        }
         if (changed) didApply = true;
         if (changed) shouldResetEditorContent = true;
         continue;
@@ -1731,23 +1961,39 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
         continue;
       }
 
-      if (op.op === 'style_section' && op.sectionId) {
-        const hasTarget = updatedSections.some((s) => s.id === op.sectionId);
+      if (op.op === 'style_section') {
+        const resolvedStyleTargetId =
+          op.sectionId ||
+          (op.selectedText ? findSectionIdBySelectedText(op.selectedText) || resolveSectionIdFromSelectedText(op.selectedText) || undefined : undefined);
+        if (!resolvedStyleTargetId) continue;
+        const hasTarget = updatedSections.some((s) => s.id === resolvedStyleTargetId);
         const hasStyleUpdate =
           typeof op.bold === 'boolean' || typeof op.italic === 'boolean' || Boolean(op.color);
         if (!hasTarget || !hasStyleUpdate) continue;
         if (op.selectedText) {
-          const appliedInline = applyInlineStyleToSelectedText(op.sectionId, op.selectedText, op);
+          const appliedInline = applyInlineStyleToSelectedText(resolvedStyleTargetId, op.selectedText, op);
+          if (!appliedInline) {
+            applySectionStyle(resolvedStyleTargetId, { ...op, sectionId: resolvedStyleTargetId });
+          }
           if (appliedInline) didApply = true;
+          if (!appliedInline) {
+            nextSectionStyles[resolvedStyleTargetId] = {
+              ...(nextSectionStyles[resolvedStyleTargetId] || {}),
+              ...(typeof op.bold === 'boolean' ? { bold: op.bold } : {}),
+              ...(typeof op.italic === 'boolean' ? { italic: op.italic } : {}),
+              ...(op.color ? { color: op.color } : {}),
+            };
+            didApply = true;
+          }
           continue;
         }
-        nextSectionStyles[op.sectionId] = {
-          ...(nextSectionStyles[op.sectionId] || {}),
+        nextSectionStyles[resolvedStyleTargetId] = {
+          ...(nextSectionStyles[resolvedStyleTargetId] || {}),
           ...(typeof op.bold === 'boolean' ? { bold: op.bold } : {}),
           ...(typeof op.italic === 'boolean' ? { italic: op.italic } : {}),
           ...(op.color ? { color: op.color } : {}),
         };
-        applySectionStyle(op.sectionId, op);
+        applySectionStyle(resolvedStyleTargetId, { ...op, sectionId: resolvedStyleTargetId });
         didApply = true;
       }
     }
@@ -1826,29 +2072,44 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
         continue;
       }
 
-      if (op.op === 'delete_section' && op.sectionId) {
+      if (op.op === 'delete_section' && (op.sectionId || op.selectedText)) {
         if (op.selectedText) {
-          nextSections = nextSections.map((s) => {
-            if (s.id !== op.sectionId || s.type === 'image') return s;
-            const replaced = replaceSelectedTextInText(s.text || '', op.selectedText || '', '');
-            return replaced.didReplace ? { ...s, text: replaced.nextText } : s;
-          });
+          const replaced = replaceSelectedTextAcrossSections(
+            nextSections,
+            op.selectedText,
+            '',
+            op.sectionId
+          );
+          if (replaced.didReplace) {
+            nextSections = replaced.sections;
+          }
         } else {
           nextSections = nextSections.filter((s) => s.id !== op.sectionId);
         }
         continue;
       }
 
-      if (op.op === 'replace_section_text' && op.sectionId && op.text) {
+      if (op.op === 'replace_section_text' && (op.sectionId || op.selectedText) && op.text) {
         const replacedText = normalizeLayoutText(op.text);
-        nextSections = nextSections.map((s) => {
-          if (s.id !== op.sectionId) return s;
-          if (op.selectedText && s.type !== 'image') {
-            const replaced = replaceSelectedTextInText(s.text || '', op.selectedText, replacedText);
-            return replaced.didReplace ? { ...s, text: replaced.nextText } : s;
+        if (op.selectedText) {
+          const replaced = replaceSelectedTextAcrossSections(
+            nextSections,
+            op.selectedText,
+            replacedText,
+            op.sectionId
+          );
+          if (replaced.didReplace) {
+            nextSections = replaced.sections;
           }
-          return { ...s, text: replacedText };
-        });
+        } else {
+          nextSections = nextSections.map((s) => {
+            if (s.id !== op.sectionId) return s;
+            if (s.type === 'heading' && looksLikeFormattingDirectiveText(replacedText)) {
+              return s;
+            }
+            return { ...s, text: replacedText };
+          });
+        }
         continue;
       }
 
@@ -2471,31 +2732,45 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
           };
           continue;
         }
-        if (op.op === 'delete_section' && op.sectionId) {
+        if (op.op === 'delete_section' && (op.sectionId || op.selectedText)) {
           if (op.selectedText) {
-            next.sections = next.sections.map((s) => {
-              if (s.id !== op.sectionId || s.type === 'image') return s;
-              const replaced = replaceSelectedTextInText(s.text || '', op.selectedText || '', '');
-              return replaced.didReplace ? { ...s, text: replaced.nextText } : s;
-            });
-          } else {
-            next.sections = next.sections.filter((s) => s.id !== op.sectionId);
-            delete next.sectionStyles[op.sectionId];
+            const replaced = replaceSelectedTextAcrossSections(
+              next.sections,
+              op.selectedText,
+              '',
+              op.sectionId
+            );
+          if (replaced.didReplace) {
+            next.sections = replaced.sections;
           }
-          continue;
+        } else {
+          if (!op.sectionId) continue;
+          next.sections = next.sections.filter((s) => s.id !== op.sectionId);
+          delete next.sectionStyles[op.sectionId];
         }
-        if (op.op === 'replace_section_text' && op.sectionId) {
+        continue;
+      }
+        if (op.op === 'replace_section_text' && (op.sectionId || op.selectedText)) {
           const newText = normalizeLayoutText(op.text || '');
-          next.sections = next.sections.map((s) =>
-            s.id === op.sectionId
-              ? op.selectedText && s.type !== 'image'
-                ? (() => {
-                    const replaced = replaceSelectedTextInText(s.text || '', op.selectedText || '', newText);
-                    return replaced.didReplace ? { ...s, text: replaced.nextText } : s;
-                  })()
-                : { ...s, text: newText }
-              : s
-          );
+          if (op.selectedText) {
+            const replaced = replaceSelectedTextAcrossSections(
+              next.sections,
+              op.selectedText,
+              newText,
+              op.sectionId
+            );
+            if (replaced.didReplace) {
+              next.sections = replaced.sections;
+            }
+          } else {
+            next.sections = next.sections.map((s) =>
+              s.id === op.sectionId
+                ? (s.type === 'heading' && looksLikeFormattingDirectiveText(newText)
+                    ? s
+                    : { ...s, text: newText })
+                : s
+            );
+          }
           continue;
         }
         if (op.op === 'replace_image' && op.sectionId) {
@@ -2611,30 +2886,22 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
       const resolvedId =
         resolveSectionId(requestedId, localBlog.sections) ||
         findSectionIdByOriginalText(sanitizePlainText(msg.actionData.originalText || ''), localBlog.sections) ||
+        findSectionIdBySelectedText(normalizeLayoutText(msg.actionData.selectedText || '')) ||
         requestedId;
       const selectedText = normalizeLayoutText(msg.actionData.selectedText || '');
       if (selectedText && resolvedId && resolvedId !== 'title' && resolvedId !== 'subtitle') {
         const replacement = normalizeLayoutText(msg.actionData.editedText);
-        let changed = false;
-        const updatedSections = localBlog.sections.map((sec) => {
-          if (sec.id !== resolvedId) return sec;
-          if (sec.type === 'image') {
-            const source = sec.caption || sec.text || '';
-            const replaced = replaceSelectedTextInText(source, selectedText, replacement);
-            if (!replaced.didReplace) return sec;
-            changed = true;
-            return { ...sec, text: replaced.nextText, caption: replaced.nextText };
-          }
-          const replaced = replaceSelectedTextInText(sec.text || '', selectedText, replacement);
-          if (!replaced.didReplace) return sec;
-          changed = true;
-          return { ...sec, text: replaced.nextText };
-        });
-        if (changed) {
-          const updated = { ...localBlog, sections: updatedSections };
+        const replaced = replaceSelectedTextAcrossSections(
+          localBlog.sections,
+          selectedText,
+          replacement,
+          resolvedId
+        );
+        if (replaced.didReplace) {
+          const updated = { ...localBlog, sections: replaced.sections };
           setLocalBlog(updated);
           debounceUpdateParent(updated);
-          setEditorContentSilently(updatedSections);
+          setEditorContentSilently(replaced.sections);
           applyStoredSectionStyles(latestSectionStylesRef.current);
           didApply = true;
         }
@@ -2958,6 +3225,8 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
     const originalLines: string[] = [];
     const suggestedLines: string[] = [];
     let suggestedStyle: TitleStyleState | undefined;
+    const findOperationSnapshot = (index: number): OperationOriginalSnapshot | undefined =>
+      operationOriginals?.find((x) => x.opIndex === index) || operationOriginals?.[index];
     const listOrDeleteTargets = new Set(
       operations
         .filter((op) => op.op === 'replace_section_text' || op.op === 'delete_section' || op.op === 'replace_image')
@@ -2971,9 +3240,96 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
       bucket.push(normalized);
     };
 
+    // Preserve true list structure in diff cards when multiple list items are edited.
+    const scopedReplaceOps = operations
+      .map((op, index) => ({ op, index }))
+      .filter((entry) => entry.op.op === 'replace_section_text' && sanitizePlainText(entry.op.sectionId || ''));
+    const scopedReplaceBySection = new Map<string, Array<{ op: EditorOp; index: number }>>();
+    for (const entry of scopedReplaceOps) {
+      const key = sanitizePlainText(entry.op.sectionId || '');
+      if (!key) continue;
+      const bucket = scopedReplaceBySection.get(key) || [];
+      bucket.push(entry);
+      scopedReplaceBySection.set(key, bucket);
+    }
+
+    let primaryListContext:
+      | {
+          sectionId: string;
+          parsedBaselineList: ParsedList;
+          baselineItems: string[];
+          nextItems: string[];
+          style?: TitleStyleState;
+        }
+      | null = null;
+
+    const listComparable = (value: string) => normalizeComparableText(stripListPrefixesFromText(value));
+    const toListText = (parsed: ParsedList, items: string[]) =>
+      parsed.kind === 'ordered'
+        ? items.map((item, idx) => `${parsed.start + idx}. ${item}`).join('\n')
+        : items.map((item) => `- ${item}`).join('\n');
+
+    for (const [sectionId, entries] of scopedReplaceBySection.entries()) {
+      if (entries.length < 2) continue;
+      const sectionBaseline =
+        normalizeLayoutText(
+          entries
+            .map((entry) => normalizeLayoutText(findOperationSnapshot(entry.index)?.originalText || ''))
+            .find(Boolean) || ''
+        ) || normalizeLayoutText(getSectionDisplayText(sectionId));
+      const parsedBaselineList = parseListLines(sectionBaseline);
+      if (!parsedBaselineList || parsedBaselineList.items.length < 2) continue;
+
+      const nextItems = [...parsedBaselineList.items];
+      for (const { op } of entries) {
+        const replacement = normalizeLayoutText(op.text || '');
+        if (!replacement) continue;
+        const selectedComparable = listComparable(op.selectedText || '');
+
+        if (selectedComparable) {
+          const targetIndex = nextItems.findIndex((item) => {
+            const itemComparable = listComparable(item);
+            return (
+              itemComparable === selectedComparable ||
+              itemComparable.includes(selectedComparable) ||
+              selectedComparable.includes(itemComparable)
+            );
+          });
+          if (targetIndex >= 0) {
+            nextItems[targetIndex] = replacement;
+            continue;
+          }
+        }
+
+        const replacementAsList = parseListLines(replacement);
+        if (
+          replacementAsList &&
+          replacementAsList.kind === parsedBaselineList.kind &&
+          replacementAsList.items.length >= 2
+        ) {
+          for (let i = 0; i < replacementAsList.items.length; i += 1) {
+            if (i < nextItems.length) nextItems[i] = replacementAsList.items[i];
+          }
+        }
+      }
+
+      const scopedStyle = operations
+        .filter((op) => op.op === 'style_section' && sanitizePlainText(op.sectionId || '') === sectionId)
+        .reduce<TitleStyleState | undefined>((acc, op) => mergeStyle(acc, op), undefined);
+
+      if (!primaryListContext || entries.length > scopedReplaceBySection.get(primaryListContext.sectionId)!.length) {
+        primaryListContext = {
+          sectionId,
+          parsedBaselineList,
+          baselineItems: parsedBaselineList.items,
+          nextItems,
+          style: scopedStyle,
+        };
+      }
+    }
+
     for (const [index, op] of operations.entries()) {
-      const originalSnapshot =
-        operationOriginals?.find((x) => x.opIndex === index) || operationOriginals?.[index];
+      const originalSnapshot = findOperationSnapshot(index);
       if (op.op === 'rename_title') {
         pushUniqueLine(originalLines, op.selectedText || localBlog.title);
         pushUniqueLine(suggestedLines, op.text || '');
@@ -3061,14 +3417,32 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
       }
     }
 
+    let finalOriginalLines = originalLines.filter(Boolean);
+    let finalSuggestedLines = suggestedLines.filter(Boolean);
+    let finalSuggestedStyle = suggestedStyle;
+
+    if (primaryListContext) {
+      const listOriginalComparables = new Set(primaryListContext.baselineItems.map((item) => listComparable(item)));
+      const listSuggestedComparables = new Set(primaryListContext.nextItems.map((item) => listComparable(item)));
+
+      finalOriginalLines = finalOriginalLines.filter((line) => !listOriginalComparables.has(listComparable(line)));
+      finalSuggestedLines = finalSuggestedLines.filter((line) => !listSuggestedComparables.has(listComparable(line)));
+
+      finalOriginalLines = [toListText(primaryListContext.parsedBaselineList, primaryListContext.baselineItems), ...finalOriginalLines];
+      finalSuggestedLines = [toListText(primaryListContext.parsedBaselineList, primaryListContext.nextItems), ...finalSuggestedLines];
+      if (primaryListContext.style) {
+        finalSuggestedStyle = { ...(finalSuggestedStyle || {}), ...primaryListContext.style };
+      }
+    }
+
     return {
       originalText:
-        clipCardText(originalLines.filter(Boolean).join('\n\n')) ||
+        clipCardText(finalOriginalLines.join('\n\n')) ||
         'Current editor content is ready for updates.',
       suggestedText:
-        clipCardText(suggestedLines.filter(Boolean).join('\n\n')) ||
+        clipCardText(finalSuggestedLines.join('\n\n')) ||
         'Requested editor updates are ready to apply.',
-      suggestedStyle,
+      suggestedStyle: finalSuggestedStyle,
     };
   };
 

@@ -124,3 +124,48 @@ Run Date: 2026-06-22 (Asia/Calcutta)
 - `ui-regression-19-editor-final-list-restored.png`
 - `ui-regression-20-history-preview-list-format-fixed.png`
 - `ui-regression-21-chat-diff-list-format-fixed.png`
+
+---
+
+## Update: Production Regression Pass (2026-06-22, 15:00-15:15 IST)
+
+### Runtime + Build
+- `npm run dev:all` active
+  - Frontend: `http://localhost:5175`
+  - Backend: `http://localhost:3001`
+- `npm run build`: pass
+- `npm.cmd run build --prefix server`: pass
+
+### 30-Case Matrix (fresh run)
+- Command: `server\\node_modules\\.bin\\tsx.cmd tmp-qa-30-matrix.ts`
+- Result: **30/30 passed**, **0 failed**
+- Generated blog for matrix: `4ee7e73b-a9fb-4aa6-b49d-df89b90a60da`
+- Version workflow: create/get/apply/rollback all pass
+
+### Additional Live UI Verifications (browser subagent)
+- Scoped selection prompt -> suggestion -> replace -> revert: pass
+- No `I could not match the exact location to edit` error in scoped workflow during this pass
+- Chat diff cards now render list structures as semantic ordered lists (`ol/li`) for list-style edits
+- Replace button state and one-click behavior (`Replace` -> disabled `Replaced`) remains correct
+
+### Fixes Included In This Pass
+1. `src/components/BlogEditorView.tsx`
+- Improved diff-card list reconstruction for multi-line list rewrites.
+- Preserves ordered-list structure in ORIGINAL/SUGGESTED card blocks even with mixed operations.
+
+2. `server/src/services/chatAssistant.ts`
+- Tightened numbered-list intent handling to keep rewrite ops focused on dominant list-target section for rewrite-only prompts.
+
+---
+
+## Update: Final Sync Regression Pass (2026-06-22, latest)
+
+### Quick Verification Outcome
+- Command: `server\\node_modules\\.bin\\tsx.cmd tmp-qa-30-matrix.ts`
+- Result: **30/30 passed**, **0 failed**
+- Generated blog for this pass: `07d61a6e-4de3-4030-8146-9262ca0da0ed`
+
+### What This Confirms
+- Scope-safe prompt handling remains stable for selected field workflows.
+- Preview/original/suggested/history contracts remain connected for matrix scenarios.
+- Version create/get/apply/rollback path remains healthy in the same run.

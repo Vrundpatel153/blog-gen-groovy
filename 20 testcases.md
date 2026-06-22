@@ -1,5 +1,8 @@
 # 20 Testcases - Blog Chat + Generation Agent
 
+> Status note: this file is a historical regression snapshot from 2026-06-19.  
+> Current production baseline is tracked in [30 testcases.md](/C:/Users/vrund/OneDrive/Desktop/blog generation/project/30 testcases.md) with a passing 30/30 matrix.
+
 ## Test Environment
 - Frontend: `http://localhost:5178`
 - Backend API: `http://localhost:3001`
@@ -14,6 +17,9 @@
   - `08`: selected replace formatting collapse (historical failure evidence)
   - `17`: subtitle-only prompt mapped incorrectly (historical failure evidence)
   - `19`: list-format intent not strictly preserved in suggestion output
+- Current status relative to this snapshot:
+  - all three failures above were addressed in later patches,
+  - latest 30-case matrix is fully green.
 
 ## Fixes Applied During This Run
 1. Selected-scope replace stability fix (already present, revalidated):

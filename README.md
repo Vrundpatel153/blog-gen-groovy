@@ -1,73 +1,75 @@
-# React + TypeScript + Vite
+# AI Blog Studio
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Production-focused AI blog generation and editing studio with:
+- high-quality structured generation,
+- selection-scoped chat editing,
+- exact-position preview diffs,
+- one-click replace + reliable revert,
+- version history,
+- Dev.to publishing,
+- `.md` / `.html` / `.pdf` export.
 
-Currently, two official plugins are available:
+## Current Documentation Baseline
+- Skills + context source of truth:
+  - [AGENT_SKILLS_CONTEXT.md](/C:/Users/vrund/OneDrive/Desktop/blog generation/project/AGENT_SKILLS_CONTEXT.md)
+- Feature baseline (do-not-break behavior):
+  - [FEATURE_BASELINE.md](/C:/Users/vrund/OneDrive/Desktop/blog generation/project/FEATURE_BASELINE.md)
+- Full testing summary:
+  - [FULL_TEST_REPORT.md](/C:/Users/vrund/OneDrive/Desktop/blog generation/project/FULL_TEST_REPORT.md)
+- QA matrix artifacts:
+  - [30 testcases.md](/C:/Users/vrund/OneDrive/Desktop/blog generation/project/30 testcases.md)
+  - [20 testcases.md](/C:/Users/vrund/OneDrive/Desktop/blog generation/project/20 testcases.md)
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Stack
+- Frontend: React + Vite + TypeScript + TipTap
+- Backend: Express + TypeScript
+- DB: Supabase
+- AI: Azure OpenAI / OpenAI provider via server config
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## Run Commands
+- Full stack:
+```bash
+npm run dev:all
+```
+- Frontend only:
+```bash
+npm run dev
+```
+- Backend only:
+```bash
+npm run dev --prefix server
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## Build Commands
+- Frontend build:
+```bash
+npm run build
 ```
+- Backend build:
+```bash
+npm run build --prefix server
+```
+
+## Environment Notes
+Required keys are validated in `server/src/config.ts`.
+Typical required variables:
+- `VITE_SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `VITE_SUPABASE_ANON_KEY`
+- one of:
+  - `OPENAI_API_KEY`, or
+  - Azure set (`AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION`)
+- optional:
+  - `DEVTO_API_KEY` for publishing.
+
+## Important UX Constraints
+- No HTML/code leakage in user-visible chat/editor/preview text.
+- Preview must show exact in-document changes:
+  - original in light red,
+  - suggested in light green.
+- Replace must affect main editor content.
+- Revert must restore exact previous state.
+- Selection-scoped prompts must only edit selected area.
+- Theme split:
+  - cream for blog document surfaces,
+  - dark neutral shell/chat/sidebar.
