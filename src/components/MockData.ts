@@ -20,6 +20,10 @@ export interface Blog {
   tone: string;
   audience: string;
   keywords: string[];
+  publishedToDevto?: boolean;
+  devtoArticleId?: number;
+  devtoUrl?: string;
+  devtoPublishedAt?: string;
 }
 
 export const INITIAL_BLOGS: Blog[] = [

@@ -10,7 +10,9 @@ Last updated: 2026-06-22
   - request edits in chat using natural language,
   - see exact-position preview diffs (original in light red, new in light green),
   - click Replace once to apply exact changes,
-  - revert any applied change reliably.
+  - revert any applied change reliably,
+  - publish selected blogs to Dev.to,
+  - export selected blogs as `.md`, `.html`, and `.pdf` while preserving layout and media.
 
 ## Non-Negotiable UX Rules
 - No HTML tags or code snippets visible in user-facing chat/editor preview text.
@@ -82,6 +84,19 @@ Last updated: 2026-06-22
 - Keep title-to-heading visual hierarchy balanced (title always dominant).
 - Avoid filler text and generic statements.
 
+### 8. Publishing and Export Reliability
+- Dev.to publishing must use backend-only `DEVTO_API_KEY` (never expose key in frontend).
+- Publishing must be tied to the selected/current blog in editor view.
+- Published metadata (`devtoArticleId`, `devtoUrl`, `devtoPublishedAt`) must persist on the blog row.
+- If publish columns are temporarily missing in Supabase, agent must use the built-in publish-log fallback path so publish and published-list UX still work until migration is applied.
+- Export fidelity baseline:
+  - `.md` keeps heading/list/callout/image structure readable for re-editing and publishing,
+  - `.html` keeps professional blog layout and image placement,
+  - `.pdf` preserves core visual hierarchy with title/subtitle/sections/callouts/images.
+- Sidebar must surface published blogs separately with:
+  - quick preview entry point,
+  - direct open-link to published URL.
+
 ## Current Architecture Map
 - Frontend critical file:
   - `src/components/BlogEditorView.tsx`
@@ -96,12 +111,16 @@ Last updated: 2026-06-22
   - `server/src/prompts/blogGeneration.ts`
 - Backend blog routes:
   - `server/src/routes/blogs.ts`
+- Backend publish/export services:
+  - `server/src/services/devtoPublisher.ts`
+  - `server/src/services/blogExport.ts`
 - Persistence routes/services:
   - `server/src/routes/chat.ts`
   - `server/src/routes/sections.ts`
   - `src/services/chatService.ts`
   - `src/services/blogService.ts`
   - `server/src/utils/plainText.ts`
+  - `server/migrations/002_publish_export_upgrade.sql`
   - `index.html`
   - `public/favicon.svg`
 
@@ -142,6 +161,14 @@ Run all before merging:
 10. Confirm history cards/version previews render inline images when URL data is present.
 11. Confirm subtitle is visible and persisted in editor + preview.
 12. Confirm shell/blog theme split (neutral shell, cream document).
+13. Publish the selected blog to Dev.to and confirm:
+  - publish success response,
+  - persisted published link on reload,
+  - entry appears in sidebar Published Blogs list.
+14. Export selected blog as `.md`, `.html`, `.pdf` and verify:
+  - headings/lists/callouts maintain structure,
+  - image links render in HTML/PDF outputs,
+  - title/subtitle hierarchy remains intact.
 
 ## Live Run Commands
 - Full stack:
@@ -159,6 +186,8 @@ Run all before merging:
 - Manual editing remains smooth and uninterrupted.
 - Images render consistently in both editor and preview.
 - Theme boundaries remain intact (cream blog document vs neutral shell/chat/sidebar).
+- Publish/export flows are reliable and scoped to the selected blog.
+- Published blog list remains visible in sidebar with preview + external link.
 
 ## Latest Verified State (2026-06-22)
 - Full runtime health rechecked:

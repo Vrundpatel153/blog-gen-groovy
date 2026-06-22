@@ -5,6 +5,7 @@
 import type { Blog } from '../components/MockData';
 
 const API_BASE = '/api';
+type BlogExportFormat = 'md' | 'html' | 'pdf';
 
 const MARKDOWN_IMAGE_PATTERN = /!\[([^\]]*)\]\(([^)]+)\)/;
 const BLOCKED_IMAGE_HOSTS = new Set([
@@ -163,9 +164,33 @@ function mapApiBlogToFrontend(apiBlog: any): Blog {
     tone: apiBlog.tone,
     audience: apiBlog.audience,
     keywords: apiBlog.keywords || [],
+    publishedToDevto: Boolean(apiBlog.publishedToDevto || apiBlog.devtoUrl),
+    devtoArticleId:
+      typeof apiBlog.devtoArticleId === 'number'
+        ? apiBlog.devtoArticleId
+        : apiBlog.devtoArticleId
+          ? Number(apiBlog.devtoArticleId)
+          : undefined,
+    devtoUrl: typeof apiBlog.devtoUrl === 'string' ? apiBlog.devtoUrl : '',
+    devtoPublishedAt: typeof apiBlog.devtoPublishedAt === 'string' ? apiBlog.devtoPublishedAt : '',
     sections: normalizeSectionsForEditor(apiBlog.sections || []),
   };
 }
+
+const parseFilenameFromDisposition = (header: string | null, fallback: string): string => {
+  if (!header) return fallback;
+  const utfMatch = header.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utfMatch?.[1]) {
+    try {
+      return decodeURIComponent(utfMatch[1]);
+    } catch {
+      return utfMatch[1];
+    }
+  }
+
+  const basicMatch = header.match(/filename="?([^";]+)"?/i);
+  return basicMatch?.[1] || fallback;
+};
 
 export const blogService = {
   async getBlogs(_userId?: string): Promise<Blog[]> {
@@ -236,6 +261,44 @@ export const blogService = {
   async deleteBlog(blogId: string): Promise<boolean> {
     await apiFetch(`/blogs/${blogId}`, { method: 'DELETE' });
     return true;
+  },
+
+  async getPublishedBlogs(): Promise<Blog[]> {
+    const data = await apiFetch<any[]>('/blogs/published');
+    return data.map(mapApiBlogToFrontend);
+  },
+
+  async publishToDevto(blogId: string): Promise<Blog> {
+    const data = await apiFetch<any>(`/blogs/${blogId}/publish/devto`, {
+      method: 'POST',
+    });
+    return mapApiBlogToFrontend(data);
+  },
+
+  async exportBlog(blogId: string, format: BlogExportFormat): Promise<{ blob: Blob; filename: string }> {
+    const response = await fetch(`${API_BASE}/blogs/${blogId}/export/${format}`, {
+      method: 'GET',
+    });
+
+    if (!response.ok) {
+      let message = `Failed to export .${format}`;
+      try {
+        const data = await response.json();
+        if (data?.error) {
+          message = String(data.error);
+        }
+      } catch {
+        // ignore parse failures for non-JSON errors
+      }
+      throw new Error(message);
+    }
+
+    const blob = await response.blob();
+    const filename = parseFilenameFromDisposition(
+      response.headers.get('Content-Disposition'),
+      `blog.${format}`
+    );
+    return { blob, filename };
   },
 
   async editSection(

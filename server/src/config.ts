@@ -37,6 +37,8 @@ export const config = {
   openaiApiKey: optionalEnv('OPENAI_API_KEY', '') || optionalEnv('AZURE_OPENAI_API_KEY', ''),
   azureOpenaiEndpoint: optionalEnv('AZURE_OPENAI_ENDPOINT', ''),
   azureOpenaiApiVersion: optionalEnv('AZURE_OPENAI_API_VERSION', '2024-08-01-preview'),
+  devtoApiKey: optionalEnv('DEVTO_API_KEY', ''),
+  devtoApiBaseUrl: optionalEnv('DEVTO_API_BASE_URL', 'https://dev.to/api/articles'),
 
   // AI model configuration
   ai: {

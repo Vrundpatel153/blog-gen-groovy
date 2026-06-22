@@ -42,6 +42,9 @@ create table public.blogs (
   tone text default 'Professional'::text,
   audience text default 'General Audience'::text,
   keywords text[] default '{}'::text[] not null,
+  devto_article_id bigint,
+  devto_url text,
+  devto_published_at timestamp with time zone,
   created_at timestamp with time zone default timezone('utc'::text, now()) not null,
   updated_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
@@ -118,6 +121,7 @@ create table public.prompt_logs (
 -------------------------------------------------------------------------------
 create index idx_blogs_user_id on public.blogs(user_id);
 create index idx_blogs_created_at on public.blogs(created_at desc);
+create index idx_blogs_devto_published_at on public.blogs(devto_published_at desc);
 create index idx_blog_sections_blog_id on public.blog_sections(blog_id);
 create index idx_blog_sections_position on public.blog_sections(position_order);
 create index idx_section_versions_section_id on public.section_versions(section_id);

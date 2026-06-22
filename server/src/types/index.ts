@@ -34,6 +34,10 @@ export interface Blog {
   blogType: string;
   keywords: string[];
   promptUsed?: string;
+  publishedToDevto?: boolean;
+  devtoArticleId?: number;
+  devtoUrl?: string;
+  devtoPublishedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -151,6 +155,9 @@ export interface UpdateBlogRequest {
   audience?: string;
   keywords?: string[];
   sections?: BlogSection[];
+  devtoArticleId?: number;
+  devtoUrl?: string;
+  devtoPublishedAt?: string;
 }
 
 // ---------------------------------------------------------------------------

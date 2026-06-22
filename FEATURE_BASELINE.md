@@ -199,6 +199,45 @@ Future development should preserve all behaviors listed here.
   - generated image should appear in main TipTap editor and preview
   - image operations from chat (`replace_image`, `insert_image_after`) should remain visible after apply/reload.
 
+### 14. Dev.to publish workflow
+- Publish endpoint is implemented for the selected blog:
+  - `POST /api/blogs/:id/publish/devto`
+- Uses backend-only environment key:
+  - `DEVTO_API_KEY`
+- Publish writes metadata to blog persistence:
+  - `devto_article_id`
+  - `devto_url`
+  - `devto_published_at`
+- Backward-compat safety:
+  - if Dev.to columns are not yet present in Supabase, publish still succeeds using a persisted publish-log fallback (`prompt_logs`) and remains visible in `/api/blogs` and `/api/blogs/published`.
+- Blog status is set to `Published` when publish succeeds.
+- Publish endpoint is idempotent for already-published blogs:
+  - returns existing published metadata without creating duplicate publish operations.
+
+### 15. Export workflow (.md / .html / .pdf)
+- Export endpoint is implemented for the selected blog:
+  - `GET /api/blogs/:id/export/:format` where format is `md`, `html`, or `pdf`.
+- Markdown export baseline:
+  - preserves heading hierarchy
+  - keeps ordered/bullet list shape
+  - keeps callout semantics as quoted blocks
+  - keeps image sections as markdown image nodes
+- HTML export baseline:
+  - uses complete document output with editorial cream-paper styling
+  - preserves title/subtitle hierarchy, section spacing, lists, callouts, images, captions
+- PDF export baseline:
+  - preserves professional reading structure for title/subtitle/headings/paragraphs/callouts
+  - renders supported image types (PNG/JPG and data URL image payloads)
+  - keeps section order and spacing for publication-ready output
+
+### 16. Sidebar published blogs section
+- Sidebar now contains a dedicated `Published Blogs` section.
+- It lists up to recent 10 blogs with persisted Dev.to links.
+- Each row includes:
+  - preview button (opens blog in editor)
+  - open-link button (opens published URL in new tab)
+- Empty-state guidance appears when no blog has been published yet.
+
 ## API Surface Baseline
 
 ### Health
@@ -207,9 +246,12 @@ Future development should preserve all behaviors listed here.
 ### Blogs
 - `POST /api/blogs/generate`
 - `GET /api/blogs`
+- `GET /api/blogs/published`
 - `GET /api/blogs/:id`
 - `PUT /api/blogs/:id`
 - `DELETE /api/blogs/:id`
+- `POST /api/blogs/:id/publish/devto`
+- `GET /api/blogs/:id/export/:format`
 
 ### Sections and versions
 - `POST /api/sections/:id/edit`
@@ -281,11 +323,23 @@ Before merging any feature touching chat/editor/generation:
    - preview modal
    - history cards
    - history preview modal.
+11. Confirm Dev.to publish for selected blog:
+   - success response and saved publish metadata,
+   - published link appears in sidebar published list.
+12. Confirm export outputs for selected blog:
+   - `.md` readable and structured,
+   - `.html` visual layout + images + spacing preserved,
+   - `.pdf` visual hierarchy + images preserved.
 
 ## Latest Validation Snapshot (2026-06-22)
 - Full QA matrix: **30/30 pass**.
 - Workflow lifecycle (version create/get/apply/rollback): **pass**.
 - Live UI scoped workflow (generate -> preview -> replace -> revert -> history): **pass**.
+- Frontend build: **pass**.
+- Backend build: **pass**.
+- Publish/export codepath compile check:
+  - Dev.to publish route: **pass**
+  - Markdown/HTML/PDF export route: **pass**
 - Latest validated evidence and regression notes are tracked in:
   - `30 testcases.md`
   - `20 testcases.md`
@@ -302,6 +356,8 @@ Before merging any feature touching chat/editor/generation:
   - `server/src/routes/blogs.ts`
   - `server/src/routes/sections.ts`
   - `server/src/services/chatPersistence.ts`
+  - `server/src/services/devtoPublisher.ts`
+  - `server/src/services/blogExport.ts`
 - Frontend:
   - `src/components/BlogEditorView.tsx`
   - `src/services/chatService.ts`
@@ -312,6 +368,7 @@ Before merging any feature touching chat/editor/generation:
   - `src/index.css`
   - `index.html`
   - `public/favicon.svg`
+  - `server/migrations/002_publish_export_upgrade.sql`
 
 ## Change Policy
 If a new feature requires changing baseline behavior, update this file in the same PR with:

@@ -7,6 +7,15 @@ import { z } from 'zod';
 import { validate } from '../middleware/validate.js';
 import * as blogPersistence from '../services/blogPersistence.js';
 import * as blogGenerator from '../services/blogGenerator.js';
+import * as devtoPublisher from '../services/devtoPublisher.js';
+import {
+  buildBlogHtmlDocument,
+  buildBlogMarkdown,
+  buildBlogPdf,
+  type BlogExportFormat,
+  buildExportFilename,
+  getExportMimeType,
+} from '../services/blogExport.js';
 import type { GenerateBlogRequest } from '../types/index.js';
 import { normalizeLayoutText, stripHtmlAndCode } from '../utils/plainText.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -53,6 +62,9 @@ const updateSchema = z.object({
   tone: z.string().optional(),
   audience: z.string().optional(),
   keywords: z.array(z.string()).optional(),
+  devtoArticleId: z.number().optional(),
+  devtoUrl: z.string().optional(),
+  devtoPublishedAt: z.string().optional(),
   sections: z
     .array(
       z.object({
@@ -66,6 +78,8 @@ const updateSchema = z.object({
     )
     .optional(),
 });
+
+const exportFormatSchema = z.enum(['md', 'html', 'pdf']);
 
 // ---------------------------------------------------------------------------
 // POST /api/blogs/generate — Generate a new blog from AI
@@ -138,6 +152,83 @@ router.get('/', async (req, res, next) => {
   try {
     const blogs = await blogPersistence.listBlogs(req.userId);
     res.json({ success: true, data: blogs });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/blogs/published — List Dev.to published blogs
+// ---------------------------------------------------------------------------
+router.get('/published', async (req, res, next) => {
+  try {
+    const blogs = await blogPersistence.listPublishedBlogs(req.userId);
+    res.json({ success: true, data: blogs });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/blogs/:id/publish/devto — Publish selected blog to Dev.to
+// ---------------------------------------------------------------------------
+router.post('/:id/publish/devto', async (req, res, next) => {
+  try {
+    const blog = await blogPersistence.getBlogById(req.params.id as string);
+    if (blog.userId !== req.userId) {
+      throw new AppError(403, 'You do not have access to this blog.');
+    }
+
+    if (blog.devtoUrl) {
+      res.json({ success: true, data: blog });
+      return;
+    }
+
+    const publishResult = await devtoPublisher.publishBlogToDevto(blog);
+    const updatedBlog = await blogPersistence.markBlogPublishedToDevto(blog.id, {
+      articleId: publishResult.articleId,
+      url: publishResult.url,
+      publishedAt: publishResult.publishedAt,
+    }, blog.userId);
+
+    res.json({ success: true, data: updatedBlog });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/blogs/:id/export/:format — Export selected blog (.md/.html/.pdf)
+// ---------------------------------------------------------------------------
+router.get('/:id/export/:format', async (req, res, next) => {
+  try {
+    const formatResult = exportFormatSchema.safeParse(req.params.format);
+    if (!formatResult.success) {
+      throw new AppError(400, 'Unsupported export format. Use md, html, or pdf.');
+    }
+    const format = formatResult.data as BlogExportFormat;
+
+    const blog = await blogPersistence.getBlogById(req.params.id as string);
+    if (blog.userId !== req.userId) {
+      throw new AppError(403, 'You do not have access to this blog.');
+    }
+
+    const filename = buildExportFilename(blog, format);
+    res.setHeader('Content-Type', getExportMimeType(format));
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    if (format === 'md') {
+      res.send(buildBlogMarkdown(blog));
+      return;
+    }
+
+    if (format === 'html') {
+      res.send(buildBlogHtmlDocument(blog));
+      return;
+    }
+
+    const pdfBytes = await buildBlogPdf(blog);
+    res.send(Buffer.from(pdfBytes));
   } catch (err) {
     next(err);
   }

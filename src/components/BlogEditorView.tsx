@@ -583,6 +583,9 @@ export const BlogEditorView: React.FC<BlogEditorViewProps> = ({
   const [localBlog, setLocalBlog] = useState<Blog>(blog);
   const [titleStyle, setTitleStyle] = useState<TitleStyleState>({});
   const [sectionStyleMap, setSectionStyleMap] = useState<Record<string, TitleStyleState>>({});
+  const [isPublishMenuOpen, setIsPublishMenuOpen] = useState(false);
+  const [isPublishingToDevto, setIsPublishingToDevto] = useState(false);
+  const [exportingFormat, setExportingFormat] = useState<'md' | 'html' | 'pdf' | null>(null);
 
   const saveTimeoutRef = useRef<any>(null);
   const titleRef = useRef<HTMLTextAreaElement>(null);
@@ -591,6 +594,7 @@ export const BlogEditorView: React.FC<BlogEditorViewProps> = ({
   const skipEditorOnUpdateRef = useRef<number>(0);
   const latestSectionsRef = useRef<BlogSection[]>(blog.sections || []);
   const latestSectionStylesRef = useRef<Record<string, TitleStyleState>>({});
+  const publishMenuRef = useRef<HTMLDivElement>(null);
 
   // AI Assistant state
   const [chatInput, setChatInput] = useState('');
@@ -860,6 +864,20 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
       subtitleRef.current.style.height = `${subtitleRef.current.scrollHeight}px`;
     }
   }, [localBlog.subtitle]);
+
+  useEffect(() => {
+    if (!isPublishMenuOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const menu = publishMenuRef.current;
+      if (!menu) return;
+      if (menu.contains(event.target as Node)) return;
+      setIsPublishMenuOpen(false);
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [isPublishMenuOpen]);
 
   const debounceUpdateParent = (updatedBlog: Blog) => {
     if (saveTimeoutRef.current) {
@@ -2108,6 +2126,55 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
         console.error('Failed to rollback:', err);
         alert('Rollback failed. Please try again.');
       }
+    }
+  };
+
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(objectUrl);
+  };
+
+  const publishCurrentBlogToDevto = async () => {
+    if (isPublishingToDevto) return;
+    setIsPublishingToDevto(true);
+    setIsPublishMenuOpen(false);
+
+    try {
+      const publishedBlog = await blogService.publishToDevto(localBlog.id);
+      setLocalBlog(publishedBlog);
+      onUpdateBlog(publishedBlog);
+      if (publishedBlog.devtoUrl) {
+        alert(`Published successfully: ${publishedBlog.devtoUrl}`);
+      } else {
+        alert('Published to Dev.to successfully.');
+      }
+    } catch (err) {
+      console.error('Failed to publish blog to Dev.to:', err);
+      alert(`Publish failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setIsPublishingToDevto(false);
+    }
+  };
+
+  const exportCurrentBlog = async (format: 'md' | 'html' | 'pdf') => {
+    if (exportingFormat) return;
+    setExportingFormat(format);
+    setIsPublishMenuOpen(false);
+
+    try {
+      const result = await blogService.exportBlog(localBlog.id, format);
+      downloadBlob(result.blob, result.filename || `${localBlog.title || 'blog'}.${format}`);
+    } catch (err) {
+      console.error(`Failed to export blog as .${format}:`, err);
+      alert(`Export failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setExportingFormat(null);
     }
   };
 
@@ -3450,14 +3517,79 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
             )}
           </button>
 
-          {/* Publish Split Button */}
-          <div className="flex items-center bg-brand-primary hover:bg-brand-primaryHover text-white rounded-xl shadow-md shadow-black/20 transition-colors">
-            <button className="py-2 px-4 text-xs font-semibold border-r border-white/20 active:scale-[0.98]">
-              Publish
-            </button>
-            <button className="py-2 px-2.5 active:scale-[0.98]">
-              <Icons.ChevronDown className="w-3.5 h-3.5" />
-            </button>
+          {/* Publish + Export Split Button */}
+          <div ref={publishMenuRef} className="relative">
+            <div className="flex items-center bg-brand-primary text-white rounded-xl shadow-md shadow-black/20 transition-colors">
+              <button
+                onClick={publishCurrentBlogToDevto}
+                disabled={isPublishingToDevto}
+                className={`py-2 px-4 text-xs font-semibold border-r border-white/20 active:scale-[0.98] ${
+                  isPublishingToDevto ? 'opacity-70 cursor-wait' : 'hover:bg-brand-primaryHover rounded-l-xl'
+                }`}
+              >
+                {isPublishingToDevto ? 'Publishing...' : 'Publish to Dev.to'}
+              </button>
+              <button
+                onClick={() => setIsPublishMenuOpen((prev) => !prev)}
+                className="py-2 px-2.5 active:scale-[0.98] hover:bg-brand-primaryHover rounded-r-xl"
+              >
+                <Icons.ChevronDown className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {isPublishMenuOpen && (
+              <div className="absolute right-0 mt-2 min-w-[220px] rounded-xl border border-slate-200 bg-white shadow-xl z-30 overflow-hidden">
+                <button
+                  onClick={publishCurrentBlogToDevto}
+                  disabled={isPublishingToDevto}
+                  className="w-full text-left px-3.5 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  <Icons.Send className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>{isPublishingToDevto ? 'Publishing to Dev.to...' : 'Publish Current Blog to Dev.to'}</span>
+                </button>
+
+                <div className="border-t border-slate-100" />
+
+                <button
+                  onClick={() => exportCurrentBlog('md')}
+                  disabled={Boolean(exportingFormat)}
+                  className="w-full text-left px-3.5 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  <Icons.FileText className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Export as Markdown (.md)</span>
+                </button>
+                <button
+                  onClick={() => exportCurrentBlog('html')}
+                  disabled={Boolean(exportingFormat)}
+                  className="w-full text-left px-3.5 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  <Icons.Code2 className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Export as HTML (.html)</span>
+                </button>
+                <button
+                  onClick={() => exportCurrentBlog('pdf')}
+                  disabled={Boolean(exportingFormat)}
+                  className="w-full text-left px-3.5 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  <Icons.FileDown className="w-3.5 h-3.5 text-slate-500" />
+                  <span>{exportingFormat === 'pdf' ? 'Exporting PDF...' : 'Export as PDF (.pdf)'}</span>
+                </button>
+
+                {localBlog.devtoUrl ? (
+                  <>
+                    <div className="border-t border-slate-100" />
+                    <a
+                      href={localBlog.devtoUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block px-3.5 py-2.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50"
+                    >
+                      Open Published Link
+                    </a>
+                  </>
+                ) : null}
+              </div>
+            )}
           </div>
         </div>
       </header>

@@ -3,10 +3,10 @@ import * as Icons from 'lucide-react';
 import type { Blog } from './MockData';
 
 interface SidebarProps {
-  currentView: 'dashboard' | 'editor';
+  currentView: 'dashboard' | 'editor' | 'published';
   selectedBlogId: string | null;
   blogs: Blog[];
-  onNavigate: (view: 'dashboard' | 'editor', blogId?: string) => void;
+  onNavigate: (view: 'dashboard' | 'editor' | 'published', blogId?: string) => void;
   onNewBlog: () => void;
   isDarkSidebar: boolean;
   style?: React.CSSProperties;
@@ -25,6 +25,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const menuItems = [
     { id: 'dashboard', label: 'Dashboard', icon: 'LayoutDashboard' },
     { id: 'all-blogs', label: 'All Blogs', icon: 'FileText' },
+    { id: 'published-blogs', label: 'Published Blogs', icon: 'Send' },
     { id: 'drafts', label: 'Drafts', icon: 'FileEdit' },
     { id: 'templates', label: 'Templates', icon: 'Layers' },
     { id: 'ai-assistant', label: 'AI Assistant', icon: 'Bot' },
@@ -77,7 +78,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {menuItems.map((item) => {
             const isSelected =
               (item.id === 'dashboard' && currentView === 'dashboard') ||
-              (item.id === 'drafts' && currentView === 'editor');
+              ((item.id === 'drafts' || item.id === 'all-blogs') && currentView === 'editor') ||
+              (item.id === 'published-blogs' && currentView === 'published');
 
             return (
               <button
@@ -85,8 +87,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 onClick={() => {
                   if (item.id === 'dashboard') {
                     onNavigate('dashboard');
-                  } else if (item.id === 'drafts' && blogs.length > 0) {
+                  } else if ((item.id === 'drafts' || item.id === 'all-blogs') && blogs.length > 0) {
                     onNavigate('editor', selectedBlogId || blogs[0].id);
+                  } else if (item.id === 'published-blogs') {
+                    onNavigate('published');
                   }
                 }}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${

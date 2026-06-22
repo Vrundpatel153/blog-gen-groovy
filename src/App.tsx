@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { CreateBlogView } from './components/CreateBlogView';
 import { BlogEditorView } from './components/BlogEditorView';
+import { PublishedBlogsView } from './components/PublishedBlogsView';
 import type { Blog } from './components/MockData';
 import { blogService } from './services/blogService';
 
@@ -12,7 +13,7 @@ const upsertBlogToFront = (items: Blog[], nextBlog: Blog): Blog[] => [
 
 function App() {
   const [blogs, setBlogs] = useState<Blog[]>([]);
-  const [currentView, setCurrentView] = useState<'dashboard' | 'editor'>('dashboard');
+  const [currentView, setCurrentView] = useState<'dashboard' | 'editor' | 'published'>('dashboard');
   const [selectedBlogId, setSelectedBlogId] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
 
@@ -75,7 +76,7 @@ function App() {
   }, [currentView]);
 
   // Navigate view handler
-  const handleNavigate = (view: 'dashboard' | 'editor', blogId?: string) => {
+  const handleNavigate = (view: 'dashboard' | 'editor' | 'published', blogId?: string) => {
     setCurrentView(view);
     if (blogId) {
       setSelectedBlogId(blogId);
@@ -161,6 +162,12 @@ function App() {
       <div className="flex-1 flex flex-col overflow-hidden">
         {currentView === 'dashboard' ? (
           <CreateBlogView onGenerate={handleGenerateBlog} isGenerating={isGenerating} />
+        ) : currentView === 'published' ? (
+          <PublishedBlogsView
+            blogs={blogs}
+            onCreateNew={handleNewBlog}
+            onOpenBlog={(blogId) => handleNavigate('editor', blogId)}
+          />
         ) : (
           selectedBlog && (
             <BlogEditorView
