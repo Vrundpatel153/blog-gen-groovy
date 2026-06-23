@@ -7,6 +7,7 @@ import { config } from '../config.js';
 import type { Blog, BlogSection } from '../types/index.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { stripHtmlAndCode } from '../utils/plainText.js';
+import { syncBlogChunks } from './blogChunks.js';
 
 const supabase = createClient(config.supabaseUrl, config.supabaseServiceRoleKey);
 const DEVTO_PUBLISH_LOG_MARKER = '__devto_publish__';
@@ -286,6 +287,8 @@ export async function createBlog(params: {
 
     if (secErr) throw new AppError(500, `Failed to create sections: ${secErr.message}`);
 
+    await syncBlogChunks(blogRow.id, params.sections);
+
     return mapDbBlogToApi(blogRow, sectionData || []);
   }
 
@@ -364,6 +367,8 @@ export async function updateBlog(
       const { error: insertErr } = await supabase.from('blog_sections').insert(sectionRows);
       if (insertErr) throw new AppError(500, `Failed to insert replacement sections: ${insertErr.message}`);
     }
+
+    await syncBlogChunks(blogId, updates.sections);
   }
 
   return getBlogById(blogId);

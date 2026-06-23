@@ -14,6 +14,7 @@ import type { AIMessage, AICompletionOptions, AICompletionResult } from '../type
 export interface AIProvider {
   name: string;
   complete(messages: AIMessage[], options?: AICompletionOptions): Promise<AICompletionResult>;
+  embed(input: string | string[]): Promise<number[][]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -26,6 +27,14 @@ class OpenAIProvider implements AIProvider {
 
   constructor(apiKey: string) {
     this.client = new OpenAI({ apiKey });
+  }
+
+  async embed(input: string | string[]): Promise<number[][]> {
+    const response = await this.client.embeddings.create({
+      model: 'text-embedding-3-small',
+      input,
+    });
+    return response.data.map((d) => d.embedding);
   }
 
   async complete(messages: AIMessage[], options: AICompletionOptions = {}): Promise<AICompletionResult> {
@@ -180,6 +189,26 @@ class AzureOpenAIProvider implements AIProvider {
     }
 
     throw new Error(lastError || 'Azure OpenAI Responses API failed for all deployment candidates.');
+  }
+
+  async embed(input: string | string[]): Promise<number[][]> {
+    const url = `${this.endpoint}/openai/v1/embeddings`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'api-key': this.apiKey,
+      },
+      body: JSON.stringify({
+        model: 'text-embedding-3-small',
+        input,
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`Azure Model Inference Embeddings failed (Status ${res.status}): ${await res.text()}`);
+    }
+    const data = await res.json() as any;
+    return data.data.map((d: any) => d.embedding);
   }
 }
 

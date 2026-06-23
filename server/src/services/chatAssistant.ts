@@ -6,6 +6,10 @@ import { getAIProvider } from './aiProvider.js';
 import { buildChatAssistantPrompt } from '../prompts/chatAssistant.js';
 import { logPrompt } from './promptLogger.js';
 import { config } from '../config.js';
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(config.supabaseUrl, config.supabaseServiceRoleKey);
+
 import type {
   BlogSection,
   ChatMessage,
@@ -841,11 +845,21 @@ function tokenizeForContextRanking(message: string): string[] {
     .filter((token) => token.length >= 4 && !stopWords.has(token));
 }
 
-function buildPromptContextPlan(
+function dotProduct(a: number[], b: number[]): number {
+  let sum = 0;
+  const len = Math.min(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    sum += a[i] * b[i];
+  }
+  return sum;
+}
+
+async function buildPromptContextPlan(
   context: SanitizedContext | undefined,
   userMessage: string,
-  isComplexInstruction: boolean
-): PromptContextPlan {
+  isComplexInstruction: boolean,
+  blogId?: string
+): Promise<PromptContextPlan> {
   if (!context) {
     return {
       mode: 'full',
@@ -932,27 +946,85 @@ function buildPromptContextPlan(
   addIndex(totalSections - 1);
   addIndex(totalSections - 2);
 
-  const tokens = tokenizeForContextRanking(userMessage);
-  if (tokens.length > 0) {
-    const scored = sections
-      .map((section, idx) => {
-        const text = matchText(sectionDisplayText(section));
-        if (!text) return { idx, score: 0 };
-        let score = 0;
-        for (const token of tokens) {
-          if (text.includes(token)) score += token.length >= 7 ? 2 : 1;
-        }
-        if (section.id === targetSectionId) score += 6;
-        if (section.type === 'heading' && score > 0) score += 1;
-        return { idx, score };
-      })
-      .filter((entry) => entry.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 6);
+  let scored: Array<{ idx: number; score: number }> = [];
+  let usedEmbeddings = false;
 
-    for (const hit of scored) {
-      addIndexWithNeighbors(hit.idx, 1);
+  if (blogId) {
+    try {
+      const { data: chunks, error } = await supabase
+        .from('blog_chunks')
+        .select('section_id, embedding')
+        .eq('blog_id', blogId);
+
+      if (chunks && chunks.length > 0) {
+        const ai = getAIProvider();
+        const [queryEmbedding] = await ai.embed(userMessage);
+
+        if (queryEmbedding) {
+          const sectionScores = new Map<string, number>();
+          for (const chunk of chunks) {
+            let embeddingArray: number[] | null = null;
+            if (typeof chunk.embedding === 'string') {
+              try {
+                embeddingArray = JSON.parse(chunk.embedding);
+              } catch (e) {
+                // Ignore parse errors
+              }
+            } else if (Array.isArray(chunk.embedding)) {
+              embeddingArray = chunk.embedding;
+            }
+
+            if (embeddingArray && Array.isArray(embeddingArray) && embeddingArray.length > 0) {
+              const score = dotProduct(queryEmbedding, embeddingArray);
+              const current = sectionScores.get(chunk.section_id) || -1;
+              if (score > current) {
+                sectionScores.set(chunk.section_id, score);
+              }
+            }
+          }
+
+          scored = sections
+            .map((section, idx) => {
+              let score = sectionScores.get(section.id) || 0;
+              if (section.id === targetSectionId) score += 0.5;
+              if (section.type === 'heading' && score > 0) score += 0.05;
+              return { idx, score };
+            })
+            .filter((entry) => entry.score > 0.35)
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 6);
+
+          usedEmbeddings = true;
+        }
+      }
+    } catch (err) {
+      console.warn('[buildPromptContextPlan] Embedding search failed, falling back to keyword ranking:', err);
     }
+  }
+
+  if (!usedEmbeddings) {
+    const tokens = tokenizeForContextRanking(userMessage);
+    if (tokens.length > 0) {
+      scored = sections
+        .map((section, idx) => {
+          const text = matchText(sectionDisplayText(section));
+          if (!text) return { idx, score: 0 };
+          let score = 0;
+          for (const token of tokens) {
+            if (text.includes(token)) score += token.length >= 7 ? 2 : 1;
+          }
+          if (section.id === targetSectionId) score += 6;
+          if (section.type === 'heading' && score > 0) score += 1;
+          return { idx, score };
+        })
+        .filter((entry) => entry.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 6);
+    }
+  }
+
+  for (const hit of scored) {
+    addIndexWithNeighbors(hit.idx, 1);
   }
 
   if (selectedIndices.size < 7) {
@@ -981,7 +1053,7 @@ function buildPromptContextPlan(
 
   return {
     mode: targetIdx >= 0 ? 'focused' : 'targeted',
-    reason: targetIdx >= 0 ? 'target_and_neighbors' : 'keyword_ranked_pack',
+    reason: usedEmbeddings ? 'vector_similarity_search' : (targetIdx >= 0 ? 'target_and_neighbors' : 'keyword_ranked_pack'),
     totalSections,
     promptSections: promptSections.length,
     promptContext: {
@@ -2180,7 +2252,7 @@ export async function processChat(
   const cleanContext = sanitizeContext(blogContext);
   const cleanUserMessage = stripHtmlAndCode(newMessage);
   const isComplexInstruction = isLikelyComplexInstruction(cleanUserMessage);
-  const contextPlan = buildPromptContextPlan(cleanContext, cleanUserMessage, isComplexInstruction);
+  const contextPlan = await buildPromptContextPlan(cleanContext, cleanUserMessage, isComplexInstruction, blogId);
   const promptContext = contextPlan.promptContext || cleanContext;
   const scopedFallbackCandidate = hasStrictSelectionScope(cleanContext)
     ? inferScopedSelectionAction(cleanUserMessage, cleanContext)

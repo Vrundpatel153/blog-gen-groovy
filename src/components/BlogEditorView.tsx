@@ -3972,29 +3972,213 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
     );
   };
 
+  const diffWords = (str1: string, str2: string) => {
+    const A = str1.split(/(\s+)/).filter(Boolean);
+    const B = str2.split(/(\s+)/).filter(Boolean);
+    
+    const n = A.length;
+    const m = B.length;
+    const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
+    
+    for (let i = 1; i <= n; i++) {
+      const tokenA = A[i - 1];
+      for (let j = 1; j <= m; j++) {
+        if (tokenA === B[j - 1]) {
+          dp[i][j] = dp[i - 1][j - 1] + 1;
+        } else {
+          const val1 = dp[i - 1][j];
+          const val2 = dp[i][j - 1];
+          dp[i][j] = val1 > val2 ? val1 : val2;
+        }
+      }
+    }
+    
+    let i = n;
+    let j = m;
+    const result: Array<{ type: 'common' | 'added' | 'removed'; value: string }> = [];
+    while (i > 0 || j > 0) {
+      if (i > 0 && j > 0 && A[i - 1] === B[j - 1]) {
+        result.push({ type: 'common', value: A[i - 1] });
+        i--;
+        j--;
+      } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+        result.push({ type: 'added', value: B[j - 1] });
+        j--;
+      } else {
+        result.push({ type: 'removed', value: A[i - 1] });
+        i--;
+      }
+    }
+    return result.reverse();
+  };
+
+  const renderStringWithNewlines = (str: string) => {
+    return str.split('\n').map((line, i, arr) => (
+      <React.Fragment key={i}>
+        {line}
+        {i < arr.length - 1 && <br />}
+      </React.Fragment>
+    ));
+  };
+
+  const renderInlineDiffText = (originalText: string, newText: string) => {
+    const diffs = diffWords(originalText, newText);
+    return (
+      <>
+        {diffs.map((part, idx) => {
+          if (part.type === 'added') {
+            return (
+              <ins
+                key={idx}
+                className="bg-emerald-100 text-emerald-800 no-underline font-semibold rounded px-0.5"
+              >
+                {renderStringWithNewlines(part.value)}
+              </ins>
+            );
+          }
+          if (part.type === 'removed') {
+            return (
+              <del
+                key={idx}
+                className="bg-red-100 text-red-800 line-through rounded px-0.5"
+              >
+                {renderStringWithNewlines(part.value)}
+              </del>
+            );
+          }
+          return <span key={idx}>{renderStringWithNewlines(part.value)}</span>;
+        })}
+      </>
+    );
+  };
+
+  const renderDiffedSection = (
+    originalSec: BlogSection,
+    newSec: BlogSection,
+    key: string,
+    newStyle?: TitleStyleState
+  ) => {
+    const textStyle = toTextStyle(newStyle);
+    
+    if (originalSec.type !== newSec.type) {
+      return (
+        <div key={key} className="space-y-2 preview-changed p-3 border border-dashed border-amber-200 rounded-xl bg-amber-50/20">
+          <div className="text-[10px] uppercase tracking-wider font-extrabold text-amber-700">Type Changed ({originalSec.type} ➔ {newSec.type})</div>
+          {renderPreviewSectionBlock(originalSec, `${key}-old`, { highlight: 'original' })}
+          {renderPreviewSectionBlock(newSec, `${key}-new`, { highlight: 'new', style: newStyle })}
+        </div>
+      );
+    }
+
+    if (newSec.type === 'heading') {
+      const headingLevel = newSec.level === 3 ? 3 : 2;
+      const headingClass =
+        headingLevel === 3
+          ? 'text-[var(--blog-h3-size)] leading-[1.42] font-bold text-[#4a3e30] mt-4 mb-2 p-3 border border-amber-200 bg-amber-50/30 rounded-xl'
+          : 'text-[var(--blog-h2-size)] leading-[1.34] font-extrabold text-[#3a3024] mt-5 mb-2 p-3 border border-amber-200 bg-amber-50/30 rounded-xl';
+      const HeadingTag = headingLevel === 3 ? 'h3' : 'h2';
+      return (
+        <HeadingTag key={key} className={headingClass} style={textStyle}>
+          {renderInlineDiffText(getSectionPlain(originalSec), getSectionPlain(newSec))}
+        </HeadingTag>
+      );
+    }
+
+    if (newSec.type === 'callout') {
+      return (
+        <blockquote key={key} className="p-3 border-l-4 border-amber-400 bg-amber-50/30 rounded-r-xl" style={textStyle}>
+          <div className="whitespace-pre-wrap leading-8 text-[#4a3c2d]">
+            {renderInlineDiffText(getSectionPlain(originalSec), getSectionPlain(newSec))}
+          </div>
+        </blockquote>
+      );
+    }
+
+    if (newSec.type === 'image') {
+      const captionChanged = sanitizeDisplayText(originalSec.caption || '') !== sanitizeDisplayText(newSec.caption || '');
+      const urlChanged = sanitizeDisplayText(originalSec.url || '') !== sanitizeDisplayText(newSec.url || '');
+      
+      return (
+        <div key={key} className="my-6 p-3 border border-amber-200 bg-amber-50/30 rounded-xl space-y-3">
+          <div className="flex gap-4 items-center flex-wrap">
+            {urlChanged && originalSec.url && (
+              <div className="flex-1 min-w-[200px] border border-red-200 p-2 rounded-lg bg-red-50/50">
+                <div className="text-[10px] text-red-700 font-bold mb-1">REMOVED IMAGE</div>
+                <img
+                  src={originalSec.url}
+                  alt="Original"
+                  className="rounded max-h-[200px] object-contain mx-auto"
+                />
+              </div>
+            )}
+            <div className="flex-1 min-w-[200px] border border-emerald-200 p-2 rounded-lg bg-emerald-50/50">
+              <div className="text-[10px] text-emerald-700 font-bold mb-1">{urlChanged ? 'SUGGESTED IMAGE' : 'IMAGE'}</div>
+              {newSec.url ? (
+                <img
+                  src={newSec.url}
+                  alt={sanitizeDisplayText(newSec.caption || '')}
+                  className="rounded max-h-[200px] object-contain mx-auto"
+                  onError={(e) => {
+                    const target = e.currentTarget as HTMLImageElement;
+                    target.src = defaultImageUrl(newSec.caption || newSec.text || newSec.id || 'blog-image');
+                  }}
+                />
+              ) : (
+                <div className="text-sm text-slate-500 text-center py-4">No image.</div>
+              )}
+            </div>
+          </div>
+          {(originalSec.caption || newSec.caption) && (
+            <div className="text-center text-xs text-slate-500 mt-2 font-medium">
+              {captionChanged ? (
+                renderInlineDiffText(originalSec.caption || '', newSec.caption || '')
+              ) : (
+                <span>{sanitizeDisplayText(newSec.caption || '')}</span>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <div key={key} className="text-justify leading-8 p-3 border border-amber-200 bg-amber-50/30 rounded-xl" style={textStyle}>
+        <div className="text-justify whitespace-pre-wrap leading-8 text-[#4a3c2d]">
+          {renderInlineDiffText(getSectionPlain(originalSec), getSectionPlain(newSec))}
+        </div>
+      </div>
+    );
+  };
+
   const renderInlineChangeAtPosition = (
     keyBase: string,
     originalSec: BlogSection | null,
     newSec: BlogSection | null,
     newStyle?: TitleStyleState
-  ) => (
-    <div key={keyBase} className="space-y-2 preview-changed">
-      {originalSec ? (
-        renderPreviewSectionBlock(originalSec, `${keyBase}-old`, { highlight: 'original' })
-      ) : (
-        <p key={`${keyBase}-old-empty`} className="text-sm text-slate-600 bg-red-100/80 border border-red-300 p-3 rounded-xl">
-          No original section at this location.
-        </p>
-      )}
-      {newSec ? (
-        renderPreviewSectionBlock(newSec, `${keyBase}-new`, { highlight: 'new', style: newStyle })
-      ) : (
-        <p key={`${keyBase}-new-empty`} className="text-sm text-slate-700 bg-emerald-100/80 border border-emerald-300 p-3 rounded-xl">
-          This section will be removed.
-        </p>
-      )}
-    </div>
-  );
+  ) => {
+    if (originalSec && newSec) {
+      return renderDiffedSection(originalSec, newSec, keyBase, newStyle);
+    }
+
+    return (
+      <div key={keyBase} className="space-y-2 preview-changed">
+        {originalSec ? (
+          renderPreviewSectionBlock(originalSec, `${keyBase}-old`, { highlight: 'original' })
+        ) : (
+          <p key={`${keyBase}-old-empty`} className="text-sm text-slate-600 bg-red-100/80 border border-red-300 p-3 rounded-xl">
+            No original section at this location.
+          </p>
+        )}
+        {newSec ? (
+          renderPreviewSectionBlock(newSec, `${keyBase}-new`, { highlight: 'new', style: newStyle })
+        ) : (
+          <p key={`${keyBase}-new-empty`} className="text-sm text-slate-700 bg-emerald-100/80 border border-emerald-300 p-3 rounded-xl">
+            This section will be removed.
+          </p>
+        )}
+      </div>
+    );
+  };
 
   const getSectionTypeHint = (sectionId?: string | null): BlogSection['type'] => {
     if (!sectionId) return 'paragraph';
@@ -4055,39 +4239,7 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
     };
   };
 
-  const renderHistoryTextDiffBlock = (
-    value: unknown,
-    keySeed: string,
-    opts?: {
-      sectionTypeHint?: BlogSection['type'];
-      highlight?: 'original' | 'new';
-      style?: TitleStyleState;
-    }
-  ) => {
-    const section = toHistorySectionFromText(value, keySeed, opts?.sectionTypeHint);
-    if (!section) {
-      const emptyMessage =
-        opts?.highlight === 'new'
-          ? 'No updated content available for this snapshot.'
-          : 'No original content available for this snapshot.';
-      return (
-        <p
-          key={`${keySeed}-empty`}
-          className={`text-sm p-3 rounded-xl border ${
-            opts?.highlight === 'new'
-              ? 'bg-emerald-100/80 border-emerald-300 text-slate-700'
-              : 'bg-red-100/80 border-red-300 text-slate-600'
-          }`}
-        >
-          {emptyMessage}
-        </p>
-      );
-    }
-    return renderPreviewSectionBlock(section, keySeed, {
-      highlight: opts?.highlight,
-      style: opts?.style,
-    });
-  };
+
 
   const renderSnapshotDiffBlocks = (
     beforeSections: BlogSection[],
@@ -4922,16 +5074,8 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
 
                               <div className="bg-[#f5efe4] border border-amber-100 rounded-xl p-3 max-h-[21rem] overflow-y-auto">
                                 <div className="blog-paper rounded-xl p-4 blog-content max-w-none space-y-3">
-                                  <div className="space-y-2 preview-changed">
-                                    {renderHistoryTextDiffBlock(diff.originalText, `history-card-${msg.id}-original`, {
-                                      sectionTypeHint: fallbackSectionType,
-                                      highlight: 'original',
-                                    })}
-                                    {renderHistoryTextDiffBlock(diff.suggestedText, `history-card-${msg.id}-new`, {
-                                      sectionTypeHint: fallbackSectionType,
-                                      highlight: 'new',
-                                      style: diff.suggestedStyle,
-                                    })}
+                                  <div className="leading-relaxed text-justify text-[14px] text-[#4a3c2d] whitespace-pre-wrap">
+                                    {renderInlineDiffText(diff.originalText || '', diff.suggestedText || '')}
                                   </div>
                                 </div>
                               </div>
@@ -4987,8 +5131,6 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
                         </div>
                       ) : (
                         versions.map((ver) => {
-                          const sectionTypeHint = getSectionTypeHint(ver.sectionId);
-                          const sectionStyleHint = sectionStyleMap[ver.sectionId];
                           return (
                           <div key={ver.id} className="border border-slate-200 rounded-xl p-4 bg-white shadow-sm flex flex-col gap-3">
                             <div className="flex items-center justify-between text-xs border-b border-slate-100 pb-2">
@@ -5013,16 +5155,8 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
                             )}
 
                             <div className="bg-[#f5efe4] border border-amber-100 rounded-xl p-3 max-h-[21rem] overflow-y-auto">
-                              <div className="blog-paper rounded-xl p-4 blog-content max-w-none space-y-2 preview-changed">
-                                {renderHistoryTextDiffBlock(ver.originalText, `version-${ver.id}-before`, {
-                                  sectionTypeHint,
-                                  highlight: 'original',
-                                })}
-                                {renderHistoryTextDiffBlock(ver.editedText, `version-${ver.id}-after`, {
-                                  sectionTypeHint,
-                                  highlight: 'new',
-                                  style: sectionStyleHint,
-                                })}
+                              <div className="blog-paper rounded-xl p-4 blog-content max-w-none leading-relaxed text-justify text-[14px] text-[#4a3c2d] whitespace-pre-wrap">
+                                {renderInlineDiffText(ver.originalText || '', ver.editedText || '')}
                               </div>
                             </div>
 
@@ -5268,35 +5402,15 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
                   {diffCard && (
                     <div className="w-full bg-[#171a20] border border-[#2f3540] rounded-2xl p-4 shadow-sm flex flex-col gap-4 my-1.5 select-none">
                       <div className="flex flex-col gap-3.5 pb-1">
-                        <div className="border border-red-300 bg-red-100/70 rounded-2xl overflow-hidden shadow-sm">
-                          <div className="bg-red-200/70 border-b border-red-300 px-4 py-2 text-[11px] font-extrabold text-red-800 uppercase tracking-[0.18em]">
-                            ORIGINAL TEXT
-                          </div>
-                          <div className="px-4 py-3 max-h-64 overflow-y-auto">
-                            {renderListOrTextContent(diffCard.originalText, {
-                              textClassName: 'text-[14px] text-[#4a3c2d] leading-relaxed whitespace-pre-wrap',
-                              orderedListClassName: 'list-decimal pl-6 space-y-1 text-[14px] text-[#4a3c2d]',
-                              bulletListClassName: 'list-disc pl-6 space-y-1 text-[14px] text-[#4a3c2d]',
-                              itemClassName: 'leading-relaxed',
-                            })}
-                          </div>
-                        </div>
-
-                        <div className="border border-emerald-300 bg-emerald-100/70 rounded-2xl overflow-hidden shadow-sm">
-                          <div className="bg-emerald-200/70 border-b border-emerald-300 px-4 py-2 text-[11px] font-extrabold text-emerald-800 uppercase tracking-[0.18em]">
-                            SUGGESTED EDIT
+                        <div className="border border-amber-300 bg-amber-50/95 rounded-2xl overflow-hidden shadow-sm">
+                          <div className="bg-amber-200/90 border-b border-amber-300 px-4 py-2 text-[11px] font-extrabold text-amber-800 uppercase tracking-[0.18em]">
+                            SUGGESTED CHANGES
                           </div>
                           <div
-                            className="px-4 py-3 text-[14px] text-[#3b3024] leading-relaxed whitespace-pre-wrap font-semibold max-h-64 overflow-y-auto"
+                            className="px-4 py-3 text-[14px] text-[#3b3024] leading-relaxed whitespace-pre-wrap max-h-64 overflow-y-auto"
                             style={toTextStyle(diffCard.suggestedStyle)}
                           >
-                            {renderListOrTextContent(diffCard.suggestedText, {
-                              style: toTextStyle(diffCard.suggestedStyle),
-                              textClassName: 'text-[14px] text-[#3b3024] leading-relaxed whitespace-pre-wrap font-semibold',
-                              orderedListClassName: 'list-decimal pl-6 space-y-1 text-[14px] text-[#3b3024] font-semibold',
-                              bulletListClassName: 'list-disc pl-6 space-y-1 text-[14px] text-[#3b3024] font-semibold',
-                              itemClassName: 'leading-relaxed',
-                            })}
+                            {renderInlineDiffText(diffCard.originalText || '', diffCard.suggestedText || '')}
                           </div>
                         </div>
                       </div>
@@ -5900,7 +6014,7 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
       {historyDiffPreview && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-6 animate-fadeIn">
           {(() => {
-            const { message, diff, sectionTypeHint } = historyDiffPreview;
+            const { message, diff } = historyDiffPreview;
             const isReverted = Boolean(message.actionData?.revertedAt);
             const canRevert = Boolean(message.actionData?.appliedAt) && !isReverted;
             const appliedAt = message.actionData?.appliedAt || message.createdAt;
@@ -5988,20 +6102,12 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
                       {hasSnapshotPreview ? (
                         <>
                           {titleChanged ? (
-                            <div className="mb-2 space-y-2 preview-changed">
-                              <h1
-                                className="blog-doc-title bg-red-100/80 border border-red-300 rounded-xl p-3"
-                                style={toTextStyle(beforeTitleStyle)}
-                              >
-                                {sanitizeDisplayText(beforeTitle)}
-                              </h1>
-                              <h1
-                                className="blog-doc-title bg-emerald-100/80 border border-emerald-300 rounded-xl p-3"
-                                style={toTextStyle(afterTitleStyle)}
-                              >
-                                {sanitizeDisplayText(afterTitle || beforeTitle)}
-                              </h1>
-                            </div>
+                            <h1
+                              className="blog-doc-title mb-2 p-3 border border-amber-200 bg-amber-50/30 rounded-xl"
+                              style={toTextStyle(afterTitleStyle)}
+                            >
+                              {renderInlineDiffText(beforeTitle, afterTitle || beforeTitle)}
+                            </h1>
                           ) : (
                             <h1 className="blog-doc-title mb-2" style={toTextStyle(afterTitleStyle)}>
                               {sanitizeDisplayText(afterTitle || beforeTitle)}
@@ -6010,14 +6116,9 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
 
                           {(beforeSubtitle || afterSubtitle) ? (
                             subtitleChanged ? (
-                              <div className="mb-4 space-y-2 preview-changed">
-                                <p className="blog-subtitle bg-red-100/80 border border-red-300 rounded-xl p-3">
-                                  {sanitizeDisplayText(beforeSubtitle || 'No subtitle.')}
-                                </p>
-                                <p className="blog-subtitle bg-emerald-100/80 border border-emerald-300 rounded-xl p-3">
-                                  {sanitizeDisplayText(afterSubtitle || 'No subtitle.')}
-                                </p>
-                              </div>
+                              <p className="blog-subtitle mb-4 p-3 border border-amber-200 bg-amber-50/30 rounded-xl">
+                                {renderInlineDiffText(beforeSubtitle || '', afterSubtitle || '')}
+                              </p>
                             ) : (
                               <p className="blog-subtitle mb-6">{sanitizeDisplayText(afterSubtitle || beforeSubtitle)}</p>
                             )
@@ -6032,16 +6133,8 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
                           )}
                         </>
                       ) : (
-                        <div className="space-y-2 preview-changed">
-                          {renderHistoryTextDiffBlock(diff.originalText, `history-preview-${message.id}-original`, {
-                            sectionTypeHint,
-                            highlight: 'original',
-                          })}
-                          {renderHistoryTextDiffBlock(diff.suggestedText, `history-preview-${message.id}-new`, {
-                            sectionTypeHint,
-                            highlight: 'new',
-                            style: diff.suggestedStyle,
-                          })}
+                        <div className="p-3 border border-amber-200 bg-amber-50/30 rounded-xl leading-8 text-justify whitespace-pre-wrap text-[#4a3c2d]">
+                          {renderInlineDiffText(diff.originalText || '', diff.suggestedText || '')}
                         </div>
                       )}
                     </div>
@@ -6081,8 +6174,6 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
       {historyPreviewVersion && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-6 animate-fadeIn">
           {(() => {
-            const sectionTypeHint = getSectionTypeHint(historyPreviewVersion.sectionId);
-            const sectionStyleHint = sectionStyleMap[historyPreviewVersion.sectionId];
             const versionSnapshots = buildSectionVersionPreviewSnapshots(historyPreviewVersion);
             return (
           <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[82vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden animate-slideUp">
@@ -6131,17 +6222,8 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
                       )}
                     </>
                   ) : (
-                    <div className="space-y-2 preview-changed">
-                      {renderHistoryTextDiffBlock(
-                        historyPreviewVersion.originalText,
-                        `history-modal-${historyPreviewVersion.id}-raw-old`,
-                        { sectionTypeHint, highlight: 'original' }
-                      )}
-                      {renderHistoryTextDiffBlock(
-                        historyPreviewVersion.editedText,
-                        `history-modal-${historyPreviewVersion.id}-raw-new`,
-                        { sectionTypeHint, highlight: 'new', style: sectionStyleHint }
-                      )}
+                    <div className="p-3 border border-amber-200 bg-amber-50/30 rounded-xl leading-8 text-justify whitespace-pre-wrap text-[#4a3c2d]">
+                      {renderInlineDiffText(historyPreviewVersion.originalText || '', historyPreviewVersion.editedText || '')}
                     </div>
                   )}
                 </div>
