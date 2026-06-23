@@ -6,6 +6,8 @@ import { createClient } from '@supabase/supabase-js';
 import { config } from '../config.js';
 import type { SectionVersion } from '../types/index.js';
 import { AppError } from '../middleware/errorHandler.js';
+import { getBlogById } from './blogPersistence.js';
+import { syncBlogChunks } from './blogChunks.js';
 
 const supabase = createClient(config.supabaseUrl, config.supabaseServiceRoleKey);
 
@@ -89,6 +91,16 @@ export async function applyVersion(versionId: string, sectionId: string): Promis
     .from('section_versions')
     .update({ is_applied: true })
     .eq('id', versionId);
+
+  // Sync chunks
+  try {
+    const blog = await getBlogById(version.blog_id);
+    if (blog && blog.sections) {
+      await syncBlogChunks(version.blog_id, blog.sections);
+    }
+  } catch (err) {
+    console.error('[versionService] Failed to sync blog chunks after apply:', err);
+  }
 }
 
 export async function rollbackToVersion(versionId: string): Promise<void> {
@@ -107,4 +119,14 @@ export async function rollbackToVersion(versionId: string): Promise<void> {
     .eq('id', version.section_id);
 
   if (updateErr) throw new AppError(500, `Failed to rollback: ${updateErr.message}`);
+
+  // Sync chunks
+  try {
+    const blog = await getBlogById(version.blog_id);
+    if (blog && blog.sections) {
+      await syncBlogChunks(version.blog_id, blog.sections);
+    }
+  } catch (err) {
+    console.error('[versionService] Failed to sync blog chunks after rollback:', err);
+  }
 }
