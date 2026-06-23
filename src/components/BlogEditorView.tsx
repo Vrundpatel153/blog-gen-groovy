@@ -4021,6 +4021,160 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
     ));
   };
 
+   const compactCommonText = (text: string, position: 'start' | 'end' | 'middle', contextWords = 3) => {
+    const words = text.split(/(\s+)/).filter(Boolean);
+    const nonSpaceWords = words.filter(w => !/^\s+$/.test(w));
+    if (nonSpaceWords.length <= contextWords * 2) {
+      return text;
+    }
+    
+    if (position === 'start') {
+      let wordCount = 0;
+      let idx = words.length - 1;
+      while (idx >= 0 && wordCount < contextWords) {
+        if (!/^\s+$/.test(words[idx])) wordCount++;
+        idx--;
+      }
+      return '... ' + words.slice(idx + 1).join('');
+    }
+    
+    if (position === 'end') {
+      let wordCount = 0;
+      let idx = 0;
+      while (idx < words.length && wordCount < contextWords) {
+        if (!/^\s+$/.test(words[idx])) wordCount++;
+        idx++;
+      }
+      return words.slice(0, idx).join('') + ' ...';
+    }
+    
+    let startWordCount = 0;
+    let startIdx = 0;
+    while (startIdx < words.length && startWordCount < contextWords) {
+      if (!/^\s+$/.test(words[startIdx])) startWordCount++;
+      startIdx++;
+    }
+    
+    let endWordCount = 0;
+    let endIdx = words.length - 1;
+    while (endIdx >= 0 && endWordCount < contextWords) {
+      if (!/^\s+$/.test(words[endIdx])) endWordCount++;
+      endIdx--;
+    }
+    
+    if (startIdx >= endIdx) {
+      return text;
+    }
+    
+    return words.slice(0, startIdx).join('') + ' ... ' + words.slice(endIdx + 1).join('');
+  };
+
+  const renderCompactDiffText = (originalText: string, newText: string, targetType: 'removed' | 'added') => {
+    const diffs = diffWords(originalText, newText);
+    const filtered = diffs.filter(part => part.type === 'common' || part.type === targetType);
+    
+    if (filtered.length === 0) return null;
+    
+    const hasChanges = filtered.some(part => part.type === targetType);
+    if (!hasChanges) {
+      return <span className="text-slate-400">No changes.</span>;
+    }
+    
+    return (
+      <>
+        {filtered.map((part, idx) => {
+          if (part.type === 'common') {
+            const position = idx === 0 ? 'start' : idx === filtered.length - 1 ? 'end' : 'middle';
+            const compacted = compactCommonText(part.value, position);
+            return <span key={idx} className="text-slate-400">{renderStringWithNewlines(compacted)}</span>;
+          }
+          
+          if (part.type === 'removed') {
+            return (
+              <del key={idx} className="bg-red-100 text-red-800 line-through rounded px-0.5 font-normal">
+                {renderStringWithNewlines(part.value)}
+              </del>
+            );
+          }
+          
+          return (
+            <ins key={idx} className="bg-emerald-100 text-emerald-800 no-underline font-semibold rounded px-0.5">
+              {renderStringWithNewlines(part.value)}
+            </ins>
+          );
+        })}
+      </>
+    );
+  };
+
+  const renderCompactPreviewSectionBlock = (
+    sec: BlogSection,
+    key: string,
+    content: React.ReactNode,
+    opts?: { style?: TitleStyleState; highlight?: 'original' | 'new' }
+  ) => {
+    const textStyle = toTextStyle(opts?.style);
+    const highlightClass =
+      opts?.highlight === 'original'
+        ? 'bg-red-100/80 border border-red-300 p-3 rounded-xl'
+        : opts?.highlight === 'new'
+        ? 'bg-emerald-100/80 border border-emerald-300 p-3 rounded-xl'
+        : '';
+
+    if (sec.type === 'heading') {
+      const headingLevel = sec.level === 3 ? 3 : 2;
+      const headingClass =
+        headingLevel === 3
+          ? `text-[var(--blog-h3-size)] leading-[1.42] font-bold text-[#4a3e30] mt-4 mb-2 ${highlightClass}`
+          : `text-[var(--blog-h2-size)] leading-[1.34] font-extrabold text-[#3a3024] mt-5 mb-2 ${highlightClass}`;
+      const HeadingTag = headingLevel === 3 ? 'h3' : 'h2';
+      return (
+        <HeadingTag key={key} className={headingClass} style={textStyle}>
+          {content}
+        </HeadingTag>
+      );
+    }
+
+    if (sec.type === 'callout') {
+      return (
+        <blockquote key={key} className={`${highlightClass}`} style={textStyle}>
+          <div className="whitespace-pre-wrap leading-8 text-[#4a3c2d]">
+            {content}
+          </div>
+        </blockquote>
+      );
+    }
+
+    if (sec.type === 'image') {
+      return (
+        <div key={key} className={`my-6 ${highlightClass}`}>
+          {sec.url ? (
+            <img
+              src={sec.url}
+              alt={sanitizeDisplayText(sec.caption || '')}
+              className="rounded-xl max-h-[220px] object-contain mx-auto bg-amber-50/60 border border-amber-100 p-1.5"
+              onError={(e) => {
+                const target = e.currentTarget as HTMLImageElement;
+                target.src = defaultImageUrl(sec.caption || sec.text || sec.id || 'blog-image');
+              }}
+            />
+          ) : (
+            <div className="text-sm text-slate-500 text-center py-4">No image.</div>
+          )}
+          {sec.caption && <p className="text-center text-xs text-slate-400 mt-2">{content}</p>}
+        </div>
+      );
+    }
+
+    return (
+      <div key={key} className={`text-justify leading-8 ${highlightClass}`} style={textStyle}>
+        <div className="text-justify whitespace-pre-wrap leading-8 text-[#4a3c2d]">
+          {content}
+        </div>
+      </div>
+    );
+  };
+
   const renderInlineDiffText = (originalText: string, newText: string) => {
     const diffs = diffWords(originalText, newText);
     return (
@@ -4052,103 +4206,7 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
     );
   };
 
-  const renderDiffedSection = (
-    originalSec: BlogSection,
-    newSec: BlogSection,
-    key: string,
-    newStyle?: TitleStyleState
-  ) => {
-    const textStyle = toTextStyle(newStyle);
-    
-    if (originalSec.type !== newSec.type) {
-      return (
-        <div key={key} className="space-y-2 preview-changed p-3 border border-dashed border-amber-200 rounded-xl bg-amber-50/20">
-          <div className="text-[10px] uppercase tracking-wider font-extrabold text-amber-700">Type Changed ({originalSec.type} ➔ {newSec.type})</div>
-          {renderPreviewSectionBlock(originalSec, `${key}-old`, { highlight: 'original' })}
-          {renderPreviewSectionBlock(newSec, `${key}-new`, { highlight: 'new', style: newStyle })}
-        </div>
-      );
-    }
 
-    if (newSec.type === 'heading') {
-      const headingLevel = newSec.level === 3 ? 3 : 2;
-      const headingClass =
-        headingLevel === 3
-          ? 'text-[var(--blog-h3-size)] leading-[1.42] font-bold text-[#4a3e30] mt-4 mb-2 p-3 border border-amber-200 bg-amber-50/30 rounded-xl'
-          : 'text-[var(--blog-h2-size)] leading-[1.34] font-extrabold text-[#3a3024] mt-5 mb-2 p-3 border border-amber-200 bg-amber-50/30 rounded-xl';
-      const HeadingTag = headingLevel === 3 ? 'h3' : 'h2';
-      return (
-        <HeadingTag key={key} className={headingClass} style={textStyle}>
-          {renderInlineDiffText(getSectionPlain(originalSec), getSectionPlain(newSec))}
-        </HeadingTag>
-      );
-    }
-
-    if (newSec.type === 'callout') {
-      return (
-        <blockquote key={key} className="p-3 border-l-4 border-amber-400 bg-amber-50/30 rounded-r-xl" style={textStyle}>
-          <div className="whitespace-pre-wrap leading-8 text-[#4a3c2d]">
-            {renderInlineDiffText(getSectionPlain(originalSec), getSectionPlain(newSec))}
-          </div>
-        </blockquote>
-      );
-    }
-
-    if (newSec.type === 'image') {
-      const captionChanged = sanitizeDisplayText(originalSec.caption || '') !== sanitizeDisplayText(newSec.caption || '');
-      const urlChanged = sanitizeDisplayText(originalSec.url || '') !== sanitizeDisplayText(newSec.url || '');
-      
-      return (
-        <div key={key} className="my-6 p-3 border border-amber-200 bg-amber-50/30 rounded-xl space-y-3">
-          <div className="flex gap-4 items-center flex-wrap">
-            {urlChanged && originalSec.url && (
-              <div className="flex-1 min-w-[200px] border border-red-200 p-2 rounded-lg bg-red-50/50">
-                <div className="text-[10px] text-red-700 font-bold mb-1">REMOVED IMAGE</div>
-                <img
-                  src={originalSec.url}
-                  alt="Original"
-                  className="rounded max-h-[200px] object-contain mx-auto"
-                />
-              </div>
-            )}
-            <div className="flex-1 min-w-[200px] border border-emerald-200 p-2 rounded-lg bg-emerald-50/50">
-              <div className="text-[10px] text-emerald-700 font-bold mb-1">{urlChanged ? 'SUGGESTED IMAGE' : 'IMAGE'}</div>
-              {newSec.url ? (
-                <img
-                  src={newSec.url}
-                  alt={sanitizeDisplayText(newSec.caption || '')}
-                  className="rounded max-h-[200px] object-contain mx-auto"
-                  onError={(e) => {
-                    const target = e.currentTarget as HTMLImageElement;
-                    target.src = defaultImageUrl(newSec.caption || newSec.text || newSec.id || 'blog-image');
-                  }}
-                />
-              ) : (
-                <div className="text-sm text-slate-500 text-center py-4">No image.</div>
-              )}
-            </div>
-          </div>
-          {(originalSec.caption || newSec.caption) && (
-            <div className="text-center text-xs text-slate-500 mt-2 font-medium">
-              {captionChanged ? (
-                renderInlineDiffText(originalSec.caption || '', newSec.caption || '')
-              ) : (
-                <span>{sanitizeDisplayText(newSec.caption || '')}</span>
-              )}
-            </div>
-          )}
-        </div>
-      );
-    }
-
-    return (
-      <div key={key} className="text-justify leading-8 p-3 border border-amber-200 bg-amber-50/30 rounded-xl" style={textStyle}>
-        <div className="text-justify whitespace-pre-wrap leading-8 text-[#4a3c2d]">
-          {renderInlineDiffText(getSectionPlain(originalSec), getSectionPlain(newSec))}
-        </div>
-      </div>
-    );
-  };
 
   const renderInlineChangeAtPosition = (
     keyBase: string,
@@ -4157,7 +4215,18 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
     newStyle?: TitleStyleState
   ) => {
     if (originalSec && newSec) {
-      return renderDiffedSection(originalSec, newSec, keyBase, newStyle);
+      const originalText = getSectionPlain(originalSec);
+      const newText = getSectionPlain(newSec);
+      
+      const originalCompact = renderCompactDiffText(originalText, newText, 'removed');
+      const newCompact = renderCompactDiffText(originalText, newText, 'added');
+      
+      return (
+        <div key={keyBase} className="space-y-2 preview-changed p-3 border border-amber-200 bg-amber-50/15 rounded-xl">
+          {originalCompact && renderCompactPreviewSectionBlock(originalSec, `${keyBase}-old`, originalCompact, { highlight: 'original' })}
+          {newCompact && renderCompactPreviewSectionBlock(newSec, `${keyBase}-new`, newCompact, { highlight: 'new', style: newStyle })}
+        </div>
+      );
     }
 
     return (
@@ -4165,14 +4234,14 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
         {originalSec ? (
           renderPreviewSectionBlock(originalSec, `${keyBase}-old`, { highlight: 'original' })
         ) : (
-          <p key={`${keyBase}-old-empty`} className="text-sm text-slate-600 bg-red-100/80 border border-red-300 p-3 rounded-xl">
+          <p key={`${keyBase}-old-empty`} className="text-sm text-slate-650 bg-red-150 border border-red-200 p-3 rounded-xl">
             No original section at this location.
           </p>
         )}
         {newSec ? (
           renderPreviewSectionBlock(newSec, `${keyBase}-new`, { highlight: 'new', style: newStyle })
         ) : (
-          <p key={`${keyBase}-new-empty`} className="text-sm text-slate-700 bg-emerald-100/80 border border-emerald-300 p-3 rounded-xl">
+          <p key={`${keyBase}-new-empty`} className="text-sm text-slate-700 bg-emerald-150 border border-emerald-200 p-3 rounded-xl">
             This section will be removed.
           </p>
         )}
@@ -5402,15 +5471,24 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
                   {diffCard && (
                     <div className="w-full bg-[#171a20] border border-[#2f3540] rounded-2xl p-4 shadow-sm flex flex-col gap-4 my-1.5 select-none">
                       <div className="flex flex-col gap-3.5 pb-1">
-                        <div className="border border-amber-300 bg-amber-50/95 rounded-2xl overflow-hidden shadow-sm">
-                          <div className="bg-amber-200/90 border-b border-amber-300 px-4 py-2 text-[11px] font-extrabold text-amber-800 uppercase tracking-[0.18em]">
-                            SUGGESTED CHANGES
+                        <div className="border border-red-300 bg-red-100/70 rounded-2xl overflow-hidden shadow-sm">
+                          <div className="bg-red-200/70 border-b border-red-300 px-4 py-2 text-[11px] font-extrabold text-red-800 uppercase tracking-[0.18em]">
+                            ORIGINAL TEXT
+                          </div>
+                          <div className="px-4 py-3 max-h-64 overflow-y-auto text-[14px] text-[#4a3c2d] leading-relaxed whitespace-pre-wrap">
+                            {renderCompactDiffText(diffCard.originalText || '', diffCard.suggestedText || '', 'removed')}
+                          </div>
+                        </div>
+
+                        <div className="border border-emerald-300 bg-emerald-100/70 rounded-2xl overflow-hidden shadow-sm">
+                          <div className="bg-emerald-200/70 border-b border-emerald-300 px-4 py-2 text-[11px] font-extrabold text-emerald-800 uppercase tracking-[0.18em]">
+                            SUGGESTED EDIT
                           </div>
                           <div
-                            className="px-4 py-3 text-[14px] text-[#3b3024] leading-relaxed whitespace-pre-wrap max-h-64 overflow-y-auto"
+                            className="px-4 py-3 text-[14px] text-[#3b3024] leading-relaxed whitespace-pre-wrap font-semibold max-h-64 overflow-y-auto"
                             style={toTextStyle(diffCard.suggestedStyle)}
                           >
-                            {renderInlineDiffText(diffCard.originalText || '', diffCard.suggestedText || '')}
+                            {renderCompactDiffText(diffCard.originalText || '', diffCard.suggestedText || '', 'added')}
                           </div>
                         </div>
                       </div>
@@ -6102,12 +6180,20 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
                       {hasSnapshotPreview ? (
                         <>
                           {titleChanged ? (
-                            <h1
-                              className="blog-doc-title mb-2 p-3 border border-amber-200 bg-amber-50/30 rounded-xl"
-                              style={toTextStyle(afterTitleStyle)}
-                            >
-                              {renderInlineDiffText(beforeTitle, afterTitle || beforeTitle)}
-                            </h1>
+                            <div className="mb-2 space-y-2 preview-changed">
+                              <h1
+                                className="blog-doc-title bg-red-100/80 border border-red-300 rounded-xl p-3"
+                                style={toTextStyle(beforeTitleStyle)}
+                              >
+                                {renderCompactDiffText(beforeTitle, afterTitle || beforeTitle, 'removed')}
+                              </h1>
+                              <h1
+                                className="blog-doc-title bg-emerald-100/80 border border-emerald-300 rounded-xl p-3"
+                                style={toTextStyle(afterTitleStyle)}
+                              >
+                                {renderCompactDiffText(beforeTitle, afterTitle || beforeTitle, 'added')}
+                              </h1>
+                            </div>
                           ) : (
                             <h1 className="blog-doc-title mb-2" style={toTextStyle(afterTitleStyle)}>
                               {sanitizeDisplayText(afterTitle || beforeTitle)}
@@ -6116,9 +6202,14 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
 
                           {(beforeSubtitle || afterSubtitle) ? (
                             subtitleChanged ? (
-                              <p className="blog-subtitle mb-4 p-3 border border-amber-200 bg-amber-50/30 rounded-xl">
-                                {renderInlineDiffText(beforeSubtitle || '', afterSubtitle || '')}
-                              </p>
+                              <div className="mb-4 space-y-2 preview-changed">
+                                <p className="blog-subtitle bg-red-100/80 border border-red-300 rounded-xl p-3">
+                                  {renderCompactDiffText(beforeSubtitle || '', afterSubtitle || '', 'removed')}
+                                </p>
+                                <p className="blog-subtitle bg-emerald-100/80 border border-emerald-300 rounded-xl p-3">
+                                  {renderCompactDiffText(beforeSubtitle || '', afterSubtitle || '', 'added')}
+                                </p>
+                              </div>
                             ) : (
                               <p className="blog-subtitle mb-6">{sanitizeDisplayText(afterSubtitle || beforeSubtitle)}</p>
                             )
@@ -6133,8 +6224,13 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
                           )}
                         </>
                       ) : (
-                        <div className="p-3 border border-amber-200 bg-amber-50/30 rounded-xl leading-8 text-justify whitespace-pre-wrap text-[#4a3c2d]">
-                          {renderInlineDiffText(diff.originalText || '', diff.suggestedText || '')}
+                        <div className="space-y-2 preview-changed">
+                          <div className="bg-red-50/50 border border-red-200 rounded-xl p-3 leading-8 text-justify whitespace-pre-wrap text-[#4a3c2d]">
+                            {renderCompactDiffText(diff.originalText || '', diff.suggestedText || '', 'removed')}
+                          </div>
+                          <div className="bg-emerald-50/50 border border-emerald-200 rounded-xl p-3 leading-8 text-justify whitespace-pre-wrap text-[#4a3c2d] font-semibold">
+                            {renderCompactDiffText(diff.originalText || '', diff.suggestedText || '', 'added')}
+                          </div>
                         </div>
                       )}
                     </div>
