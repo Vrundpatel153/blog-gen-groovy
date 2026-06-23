@@ -280,3 +280,12 @@ body {
   color: var(--blog-ink-muted);
   letter-spacing: -0.005em;
 }
+
+/* Ambiguity Guard persistent highlight */
+.ambiguity-preview-active {
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.85), 0 0 0 9px rgba(59, 130, 246, 0.20) !important;
+  background-color: rgba(59, 130, 246, 0.12) !important;
+  border-radius: 6px;
+  transition: box-shadow 180ms ease, background-color 180ms ease;
+}
+

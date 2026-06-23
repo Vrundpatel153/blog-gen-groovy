@@ -491,7 +491,51 @@ function chooseTargetSectionId(
   return undefined;
 }
 
-function extractAmbiguityCandidateSnippets(message: string): string[] {
+function extractUnquotedTargetFromPrompt(message: string): string[] {
+  const clean = stripHtmlAndCode(message);
+  const candidates: string[] = [];
+
+  // Pattern 1: replace/change/edit X to/with/into Y
+  // e.g. "change marketing strategy to growth strategy" -> "marketing strategy"
+  const replaceToMatch = clean.match(
+    /(?:replace|change|edit|update|rewrite)\s+(?:the\s+)?(?:text|word|phrase|paragraph|line|sentence)?\s*([^"'\n]{3,120}?)\s+(?:to|with|into)\b/i
+  );
+  if (replaceToMatch?.[1]) {
+    candidates.push(replaceToMatch[1].trim());
+  }
+
+  // Pattern 2: make X bold/italic/color/highlighted
+  // e.g. "make marketing strategy bold" -> "marketing strategy"
+  const formatAsMatch = clean.match(
+    /(?:make|change|style|format)\s+(?:the\s+)?(?:text|word|phrase|paragraph|line|sentence)?\s*([^"'\n]{3,120}?)\s+(?:bold|italic|red|blue|green|underlined|highlighted|colored)\b/i
+  );
+  if (formatAsMatch?.[1]) {
+    candidates.push(formatAsMatch[1].trim());
+  }
+
+  // Pattern 3: paragraph/section about/on X
+  // e.g. "rewrite the paragraph about our pricing" -> "our pricing"
+  const aboutMatch = clean.match(
+    /(?:paragraph|section|text|part|block)\s+(?:about|on|regarding|discussing|for|covering)\s+([^"'\n.?,!]{3,100})/i
+  );
+  if (aboutMatch?.[1]) {
+    candidates.push(aboutMatch[1].trim());
+  }
+
+  // Pattern 4: bold/italic/highlight/rewrite X
+  // e.g. "bold marketing strategy" -> "marketing strategy"
+  // e.g. "rewrite our pricing section" -> "our pricing section"
+  const actionMatch = clean.match(
+    /(?:rewrite|edit|update|change|improve|bold|italic|highlight|format|delete|remove|make)\s+(?:the\s+)?(?:paragraph|section|text|part|block)?\s*([^"'\n.?,!]{3,80})/i
+  );
+  if (actionMatch?.[1]) {
+    candidates.push(actionMatch[1].trim());
+  }
+
+  return candidates;
+}
+
+export function extractAmbiguityCandidateSnippets(message: string): string[] {
   const clean = stripHtmlAndCode(message);
   const candidates: string[] = [];
   const seen = new Set<string>();
@@ -520,8 +564,11 @@ function extractAmbiguityCandidateSnippets(message: string): string[] {
     pushCandidate(replaceMatch[1]);
   }
 
+  extractUnquotedTargetFromPrompt(clean).forEach(pushCandidate);
+
   return candidates.slice(0, 5);
 }
+
 
 function findMatchingSectionsBySnippet(
   snippet: string,
@@ -574,7 +621,7 @@ function shouldRunAmbiguityGuard(message: string, context?: SanitizedContext): b
   return /\b(rewrite|replace|change|edit|update|remove|delete|make|bold|italic|color|highlight|format)\b/.test(clean);
 }
 
-function detectAmbiguousPromptTarget(
+export function detectAmbiguousPromptTarget(
   message: string,
   context?: SanitizedContext
 ): AmbiguityPromptGuard | null {
@@ -2408,6 +2455,72 @@ export async function processChat(
         originalText: '',
         anchorOriginalText: '',
       }));
+    }
+  }
+
+  // Post-AI ambiguity guard safety net
+  if (actionType === 'editor_ops' && actionData && shouldRunAmbiguityGuard(cleanUserMessage, cleanContext)) {
+    const operations = Array.isArray((actionData as any).operations)
+      ? coerceEditorOps((actionData as any).operations as any[])
+      : [];
+    const currentOriginals = Array.isArray((actionData as any).operationOriginals)
+      ? ((actionData as any).operationOriginals as any[])
+      : [];
+    for (let i = 0; i < operations.length; i++) {
+      const op = operations[i];
+      if (op.op !== 'replace_section_text') continue;
+      const snippet = op.selectedText || (currentOriginals[i] ? currentOriginals[i].originalText : '');
+      if (!snippet || snippet.length < 3) continue;
+
+      const matchingSections = findMatchingSectionsBySnippet(snippet, cleanContext);
+      if (matchingSections.length >= 2) {
+        const options: AmbiguityOption[] = matchingSections.slice(0, 8).map((section, idx) => {
+          const previewText = sectionDisplayText(section).slice(0, 220);
+          return {
+            sectionId: stripHtmlAndCode(section.id || ''),
+            sectionType: section.type,
+            occurrence: idx + 1,
+            previewText,
+            matchedSnippet: snippet,
+          };
+        });
+        if (options.length >= 2) {
+          const ambiguityMeta: ChatAssistantResponse['meta'] = {
+            tokenUsage: {
+              totalTokens: Number.isFinite(result?.tokensUsed) ? Math.max(0, Number(result.tokensUsed)) : 0,
+            },
+            contextPlan: {
+              mode: contextPlan.mode,
+              reason: 'needs_disambiguation',
+              totalSections: contextPlan.totalSections,
+              promptSections: contextPlan.promptSections,
+            },
+            model: result?.model || model || 'clarification_guard',
+            latencyMs: Date.now() - startTime,
+          };
+          const optionsPreview = options
+            .slice(0, 3)
+            .map((option) => `${option.occurrence}. ${option.previewText.slice(0, 90)}`)
+            .join(' | ');
+          const clarificationMessage = `I found ${options.length} matching areas for "${snippet}". Choose the exact occurrence to edit, then I will apply your prompt only there.${optionsPreview ? ` Matches: ${optionsPreview}` : ''}`;
+          return buildFallbackResponse(
+            {
+              actionType: 'none',
+              actionData: {
+                __meta: {
+                  needsDisambiguation: true,
+                  ambiguityType: 'multiple_matches',
+                  snippet,
+                  prompt: cleanUserMessage,
+                  options,
+                },
+              },
+              message: clarificationMessage,
+            },
+            ambiguityMeta
+          );
+        }
+      }
     }
   }
 

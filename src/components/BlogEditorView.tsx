@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import * as Icons from 'lucide-react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
@@ -2399,18 +2399,12 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
     ) as HTMLElement | null;
     if (!target) return;
 
+    root.querySelectorAll('.ambiguity-preview-active').forEach((el) => {
+      el.classList.remove('ambiguity-preview-active');
+    });
+
     target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    const prevTransition = target.style.transition;
-    const prevBoxShadow = target.style.boxShadow;
-    const prevBg = target.style.backgroundColor;
-    target.style.transition = 'box-shadow 180ms ease, background-color 180ms ease';
-    target.style.boxShadow = '0 0 0 3px rgba(59,130,246,0.85), 0 0 0 9px rgba(59,130,246,0.20)';
-    target.style.backgroundColor = 'rgba(59,130,246,0.10)';
-    window.setTimeout(() => {
-      target.style.boxShadow = prevBoxShadow;
-      target.style.backgroundColor = prevBg;
-      target.style.transition = prevTransition;
-    }, 1800);
+    target.classList.add('ambiguity-preview-active');
   };
 
   const handlePreviewAmbiguousTarget = (msg: ChatMessage, option: any) => {
@@ -2437,11 +2431,29 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
     });
     setActiveSectionId(sectionId);
     scrollToAndHighlightSection(sectionId);
+
+    // Also select the matched text snippet inside the editor to highlight the important text
+    if (editor && snippet) {
+      const range = findSelectedTextRangeInSection(sectionId, snippet);
+      if (range && range.from < range.to) {
+        editor.commands.setTextSelection({ from: range.from, to: range.to });
+        editor.commands.focus();
+      }
+    }
+
     setAmbiguitySelectionByMessageId((prev) => ({ ...prev, [msg.id]: option }));
   };
 
   const handleResolveAmbiguousTarget = async (msg: ChatMessage) => {
     if (!msg?.id) return;
+
+    const root = editorViewportRef.current || (editor?.view?.dom as HTMLElement | undefined);
+    if (root) {
+      root.querySelectorAll('.ambiguity-preview-active').forEach((el) => {
+        el.classList.remove('ambiguity-preview-active');
+      });
+    }
+
     const option = ambiguitySelectionByMessageId[msg.id];
     if (!option || typeof option !== 'object') return;
 
@@ -2635,6 +2647,13 @@ const isBlogContentEquivalent = (left: Blog, right: Blog): boolean =>
 
   // Submit AI prompt
   const handleSendChat = async (textToSend?: string) => {
+    const root = editorViewportRef.current || (editor?.view?.dom as HTMLElement | undefined);
+    if (root) {
+      root.querySelectorAll('.ambiguity-preview-active').forEach((el) => {
+        el.classList.remove('ambiguity-preview-active');
+      });
+    }
+
     const messageText = textToSend || chatInput;
     if (!messageText.trim()) return;
 

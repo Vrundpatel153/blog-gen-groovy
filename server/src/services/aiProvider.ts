@@ -189,6 +189,10 @@ class AzureOpenAIProvider implements AIProvider {
 
 let providerInstance: AIProvider | null = null;
 
+export function setAIProvider(provider: AIProvider | null): void {
+  providerInstance = provider;
+}
+
 export function getAIProvider(): AIProvider {
   if (!providerInstance) {
     const providerName = config.ai.provider;
